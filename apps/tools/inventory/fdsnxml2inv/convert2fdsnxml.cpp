@@ -20,10 +20,18 @@
 #include <fdsnxml/station.h>
 #include <fdsnxml/channel.h>
 #include <fdsnxml/comment.h>
+#include <fdsnxml/datetype.h>
+#include <fdsnxml/agency.h>
+#include <fdsnxml/email.h>
+#include <fdsnxml/name.h>
+#include <fdsnxml/operator.h>
+#include <fdsnxml/person.h>
+#include <fdsnxml/identifier.h>
 #include <fdsnxml/response.h>
 #include <fdsnxml/responsestage.h>
 #include <fdsnxml/coefficients.h>
 #include <fdsnxml/fir.h>
+#include <fdsnxml/floatnounitwithnumbertype.h>
 #include <fdsnxml/numeratorcoefficient.h>
 #include <fdsnxml/polynomial.h>
 #include <fdsnxml/polynomialcoefficient.h>
@@ -39,6 +47,7 @@
 #include <seiscomp/datamodel/inventory_package.h>
 #include <seiscomp/datamodel/dataavailability_package.h>
 #include <seiscomp/io/archive/xmlarchive.h>
+#include <seiscomp/io/archive/jsonarchive.h>
 #include <seiscomp/logging/log.h>
 
 #include <rapidjson/document.h>
@@ -123,6 +132,280 @@ void populateStageGain(FDSNXML::ResponseStage *stage, T *resp) {
 	}
 	else
 		stage->setStageGain(Core::None);
+}
+
+
+class MyContact : public Core::BaseObject {
+	private:
+		FDSNXML::PersonPtr _person;
+
+	public:
+		MyContact(): _person(new FDSNXML::Person) {}
+
+		FDSNXML::Person *get() {
+			return _person.get();
+		}
+
+		virtual void serialize(Core::Archive &ar) {
+			vector<string> name, agency, email;
+			ar & NAMED_OBJECT_HINT("name", name, Core::Archive::STATIC_TYPE);
+			ar & NAMED_OBJECT_HINT("agency", agency, Core::Archive::STATIC_TYPE);
+			ar & NAMED_OBJECT_HINT("email", email, Core::Archive::STATIC_TYPE);
+
+			for ( vector<string>::iterator it = name.begin(); it != name.end();  ++it ) {
+				FDSNXML::NamePtr fdsnName = new FDSNXML::Name;
+				fdsnName->setText(*it);
+				_person->addName(fdsnName.get());
+			}
+
+			for ( vector<string>::iterator it = agency.begin(); it != agency.end();  ++it ) {
+				FDSNXML::AgencyPtr fdsnAgency = new FDSNXML::Agency;
+				fdsnAgency->setText(*it);
+				_person->addAgency(fdsnAgency.get());
+			}
+
+			for ( vector<string>::iterator it = email.begin(); it != email.end();  ++it ) {
+				FDSNXML::EmailPtr fdsnEmail = new FDSNXML::Email;
+				fdsnEmail->setText(*it);
+				_person->addEmail(fdsnEmail.get());
+			}
+		}
+};
+
+
+template<typename T>
+void deserializeIdentifier(IO::JSONArchive &ar, T sx) {
+	string type, value;
+	ar & NAMED_OBJECT_HINT("type", type, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("value", value, Core::Archive::STATIC_TYPE);
+
+	FDSNXML::IdentifierPtr identifier = new FDSNXML::Identifier;
+	identifier->setType(type);
+	identifier->setValue(value);
+	sx->addIdentifier(identifier.get());
+}
+
+
+template<typename T>
+void deserializeOperator(IO::JSONArchive &ar, T sx) {
+	string agency, webSite;
+	vector<MyContact> contact;
+	ar & NAMED_OBJECT_HINT("agency", agency, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("webSite", webSite, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("contact", contact, Core::Archive::STATIC_TYPE);
+
+	FDSNXML::OperatorPtr oper = new FDSNXML::Operator;
+
+	if ( agency.length() > 0 ) {
+		FDSNXML::Agency fdsnAgency;
+		fdsnAgency.setText(agency);
+		oper->setAgency(fdsnAgency);
+	}
+
+	if ( webSite.length() > 0 ) {
+		FDSNXML::StringType fdsnWebSite;
+		fdsnWebSite.setText(webSite);
+		oper->setWebSite(fdsnWebSite);
+	}
+
+	for ( vector<MyContact>::iterator it = contact.begin(); it != contact.end(); ++it )
+		oper->addContact(it->get());
+
+	sx->addOperators(oper.get());
+}
+
+
+template<typename T>
+void deserializeEquipment(IO::JSONArchive &ar, T sx) {
+	string type, description, manufacturer, vendor, model, serialNumber, resourceId;
+	Core::Time installationDate, removalDate;
+	vector<Core::Time> calibrationDate;
+	ar & NAMED_OBJECT_HINT("type", type, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("description", description, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("manufacturer", manufacturer, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("vendor", vendor, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("model", model, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("serialNumber", serialNumber, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("resourceId", resourceId, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("installationDate", installationDate, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("removalDate", removalDate, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("calibrationDate", calibrationDate, Core::Archive::STATIC_TYPE);
+
+	FDSNXML::EquipmentPtr equipment = new FDSNXML::Equipment;
+
+	if ( type.length() > 0 )
+		equipment->setType(type);
+
+	if ( description.length() > 0 )
+		equipment->setDescription(description);
+
+	if ( manufacturer.length() > 0 )
+		equipment->setManufacturer(manufacturer);
+
+	if ( vendor.length() > 0 )
+		equipment->setVendor(vendor);
+
+	if ( model.length() > 0 )
+		equipment->setModel(model);
+
+	if ( serialNumber.length() > 0 )
+		equipment->setSerialNumber(serialNumber);
+
+	if ( resourceId.length() > 0 )
+		equipment->setResourceId(resourceId);
+
+	if ( installationDate.valid() )
+		equipment->setInstallationDate(FDSNXML::DateTime(installationDate));
+
+	if ( removalDate.valid() )
+		equipment->setRemovalDate(FDSNXML::DateTime(removalDate));
+
+	for ( vector<Core::Time>::iterator it = calibrationDate.begin(); it != calibrationDate.end(); ++it ) {
+		FDSNXML::DateTypePtr dt = new FDSNXML::DateType;
+		dt->setValue(FDSNXML::DateTime(*it));
+		equipment->addCalibrationDate(dt.get());
+	}
+
+	sx->addEquipment(equipment.get());
+}
+
+
+template<typename T1, typename T2, typename T3>
+void deserializeFloatType(IO::JSONArchive &ar, T1 sx, void (T2::*setProperty)(T3)) {
+	double value = NAN, upperUncertainty = NAN, lowerUncertainty = NAN;
+	string unit, measurementMethod;
+	ar & NAMED_OBJECT_HINT("value", value, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("unit", unit, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("upperUncertainty", upperUncertainty, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("lowerUncertainty", lowerUncertainty, Core::Archive::STATIC_TYPE);
+	ar & NAMED_OBJECT_HINT("measurementMethod", measurementMethod, Core::Archive::STATIC_TYPE);
+
+	FDSNXML::FloatType ft;
+
+	if ( !isnan(value) )
+		ft.setValue(value);
+
+	if ( unit.length() > 0 )
+		ft.setUnit(unit);
+
+	if ( !isnan(upperUncertainty) )
+		ft.setUpperUncertainty(upperUncertainty);
+
+	if ( !isnan(lowerUncertainty) )
+		ft.setLowerUncertainty(lowerUncertainty);
+
+	if ( measurementMethod.length() > 0 )
+		ft.setMeasurementMethod(measurementMethod);
+
+	(sx.get()->*setProperty)(ft);
+}
+
+
+template<typename T1, typename T2, typename T3>
+void deserializeString(IO::JSONArchive &ar, T1 sx, void (T2::*setProperty)(T3)) {
+	string value;
+	ar & NAMED_OBJECT_HINT("value", value, Core::Archive::STATIC_TYPE);
+	(sx.get()->*setProperty)(value);
+}
+
+
+void deserializeJSON(const string& name, IO::JSONArchive &ar, FDSNXML::NetworkPtr sx) {
+	if ( name == "FDSNXML:Identifier" )
+		deserializeIdentifier(ar, sx);
+	else if ( name == "FDSNXML:Operator" )
+		deserializeOperator(ar, sx);
+	else if ( name == "FDSNXML:SourceID" )
+		deserializeString(ar, sx, &FDSNXML::Network::setSourceID);
+}
+
+
+void deserializeJSON(const string& name, IO::JSONArchive &ar, FDSNXML::StationPtr sx) {
+	if ( name == "FDSNXML:Identifier" )
+		deserializeIdentifier(ar, sx);
+	else if ( name == "FDSNXML:Operator" )
+		deserializeOperator(ar, sx);
+	else if ( name == "FDSNXML:Equipment" )
+		deserializeEquipment(ar, sx);
+	else if ( name == "FDSNXML:WaterLevel" )
+		deserializeFloatType(ar, sx, &FDSNXML::Station::setWaterLevel);
+	else if ( name == "FDSNXML:SourceID" )
+		deserializeString(ar, sx, &FDSNXML::Station::setSourceID);
+	else if ( name == "FDSNXML:Vault" )
+		deserializeString(ar, sx, &FDSNXML::Station::setVault);
+	else if ( name == "FDSNXML:Geology" )
+		deserializeString(ar, sx, &FDSNXML::Station::setGeology);
+}
+
+
+void deserializeJSON(const string& name, IO::JSONArchive &ar, FDSNXML::ChannelPtr sx) {
+	if ( name == "FDSNXML:Identifier" )
+		deserializeIdentifier(ar, sx);
+	else if ( name == "FDSNXML:Equipment" )
+		deserializeEquipment(ar, sx);
+	else if ( name == "FDSNXML:WaterLevel" )
+		deserializeFloatType(ar, sx, &FDSNXML::Channel::setWaterLevel);
+	else if ( name == "FDSNXML:SourceID" )
+		deserializeString(ar, sx, &FDSNXML::Channel::setSourceID);
+}
+
+
+template<typename T1, typename T2>
+void populateComments(const T1 *sc, T2 sx) {
+	for ( size_t c = 0; c < sc->commentCount(); ++c ) {
+		DataModel::Comment *comment = sc->comment(c);
+		if ( comment->id().substr(0, 8) == "FDSNXML:" ) {
+			string name = comment->id().substr(0, comment->id().find('/'));
+			IO::JSONArchive ar;
+
+			if (!ar.from(comment->text().c_str())) {
+				SEISCOMP_ERROR("failed to parse %s '%s'", name.c_str(), comment->text().c_str());
+				continue;
+			}
+
+			deserializeJSON(name, ar, sx);
+			continue;
+		}
+
+		FDSNXML::CommentPtr sx_comment = new FDSNXML::Comment;
+		int id;
+		if ( Core::fromString(id, comment->id()) )
+			sx_comment->setId(id);
+		else
+			sx_comment->setId(c+1);
+		sx_comment->setValue(comment->text());
+		try { sx_comment->setBeginEffectiveTime(FDSNXML::DateTime(comment->start())); }
+		catch ( Core::ValueException ) {}
+		try { sx_comment->setEndEffectiveTime(FDSNXML::DateTime(comment->end())); }
+		catch ( Core::ValueException ) {}
+
+		try {
+			DataModel::CreationInfo ci = comment->creationInfo();
+			FDSNXML::PersonPtr author = new FDSNXML::Person;
+
+			if ( ci.author().length() > 0 ) {
+				FDSNXML::NamePtr name = new FDSNXML::Name;
+				name->setText(ci.author());
+				author->addName(name.get());
+			}
+
+			if ( ci.authorURI().length() > 0 ) {
+				FDSNXML::EmailPtr email = new FDSNXML::Email;
+				email->setText(ci.authorURI());
+				author->addEmail(email.get());
+			}
+
+			if ( ci.agencyID().length() > 0 ) {
+				FDSNXML::AgencyPtr agency = new FDSNXML::Agency;
+				agency->setText(ci.agencyID());
+				author->addAgency(agency.get());
+			}
+
+			sx_comment->addAuthor(author.get());
+		}
+		catch ( Core::ValueException ) {}
+
+		sx->addComment(sx_comment.get());
+	}
 }
 
 
@@ -255,7 +538,7 @@ FDSNXML::ResponseStagePtr convert(const DataModel::ResponseIIR *iir,
 	try {
 		const vector<double> &numerators = iir->numerators().content();
 		for ( size_t c = 0; c < numerators.size(); ++c ) {
-			FDSNXML::FloatTypePtr fv = new FDSNXML::FloatType;
+			FDSNXML::FloatNoUnitWithNumberTypePtr fv = new FDSNXML::FloatNoUnitWithNumberType;
 			fv->setValue(numerators[c]);
 			sx_iir.addNumerator(fv.get());
 		}
@@ -265,7 +548,7 @@ FDSNXML::ResponseStagePtr convert(const DataModel::ResponseIIR *iir,
 	try {
 		const vector<double> &denominators = iir->denominators().content();
 		for ( size_t c = 0; c < denominators.size(); ++c ) {
-			FDSNXML::FloatTypePtr fv = new FDSNXML::FloatType;
+			FDSNXML::FloatNoUnitWithNumberTypePtr fv = new FDSNXML::FloatNoUnitWithNumberType;
 			fv->setValue(denominators[c]);
 			sx_iir.addDenominator(fv.get());
 		}
@@ -559,21 +842,7 @@ bool Convert2FDSNStaXML::push(const DataModel::Inventory *inv) {
 		// SelectedNumberOfStations is updated at the end to reflect the
 		// numbers of stations added to this network in this run
 
-		for ( size_t c = 0; c < net->commentCount(); ++c ) {
-			DataModel::Comment *comment = net->comment(c);
-			FDSNXML::CommentPtr sx_comment = new FDSNXML::Comment;
-			int id;
-			if ( Core::fromString(id, comment->id()) )
-				sx_comment->setId(id);
-			else
-				sx_comment->setId(c+1);
-			sx_comment->setValue(comment->text());
-			try { sx_comment->setBeginEffectiveTime(FDSNXML::DateTime(comment->start())); }
-			catch ( ... ) {}
-			try { sx_comment->setEndEffectiveTime(FDSNXML::DateTime(comment->end())); }
-			catch ( ... ) {}
-			sx_net->addComment(sx_comment.get());
-		}
+		populateComments(net, sx_net);
 
 		for ( size_t s = 0; s < net->stationCount(); ++s ) {
 			DataModel::Station *sta = net->station(s);
@@ -637,21 +906,7 @@ bool Convert2FDSNStaXML::process(FDSNXML::Network *sx_net,
 		site.setName(sta->description());
 	sx_sta->setSite(site);
 
-	for ( size_t c = 0; c < sta->commentCount(); ++c ) {
-		DataModel::Comment *comment = sta->comment(c);
-		FDSNXML::CommentPtr sx_comment = new FDSNXML::Comment;
-		int id;
-		if ( Core::fromString(id, comment->id()) )
-			sx_comment->setId(id);
-		else
-			sx_comment->setId(c+1);
-		sx_comment->setValue(comment->text());
-		try { sx_comment->setBeginEffectiveTime(FDSNXML::DateTime(comment->start())); }
-		catch ( ... ) {}
-		try { sx_comment->setEndEffectiveTime(FDSNXML::DateTime(comment->end())); }
-		catch ( ... ) {}
-		sx_sta->addComment(sx_comment.get());
-	}
+	populateComments(sta, sx_sta);
 
 	for ( size_t l = 0; l < sta->sensorLocationCount(); ++l ) {
 		if ( _interrupted ) break;
@@ -734,8 +989,6 @@ bool Convert2FDSNStaXML::process(FDSNXML::Station *sx_sta,
 		sx_chan->setSampleRate(Core::None);
 		sx_chan->setSampleRateRatio(Core::None);
 	}
-
-	sx_chan->setStorageFormat(stream->format());
 
 	// Remove all existing responses and regenerate them with the
 	// following information
@@ -881,21 +1134,7 @@ bool Convert2FDSNStaXML::process(FDSNXML::Station *sx_sta,
 	}
 	catch ( ... ) {}
 
-	for ( size_t c = 0; c < stream->commentCount(); ++c ) {
-		DataModel::Comment *comment = stream->comment(c);
-		FDSNXML::CommentPtr sx_comment = new FDSNXML::Comment;
-		int id;
-		if ( Core::fromString(id, comment->id()) )
-			sx_comment->setId(id);
-		else
-			sx_comment->setId(c+1);
-		sx_comment->setValue(comment->text());
-		try { sx_comment->setBeginEffectiveTime(FDSNXML::DateTime(comment->start())); }
-		catch ( ... ) {}
-		try { sx_comment->setEndEffectiveTime(FDSNXML::DateTime(comment->end())); }
-		catch ( ... ) {}
-		sx_chan->addComment(sx_comment.get());
-	}
+	populateComments(stream, sx_chan);
 
 	// Populate availability if available
 	if ( !_dataAvailabilityLookup.empty() ) {
@@ -1128,7 +1367,7 @@ bool Convert2FDSNStaXML::process(FDSNXML::Channel *sx_chan,
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool Convert2FDSNStaXML::process(FDSNXML::Channel *sx_chan,
-                                 const DataModel::Stream *stream,
+                                 const DataModel::Stream *,
                                  const DataModel::Sensor *sensor) {
 	FDSNXML::Response *resp = NULL;
 	try { resp = &sx_chan->response(); } catch ( ...) {}
