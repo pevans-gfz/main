@@ -53,6 +53,7 @@
 #include <rapidjson/document.h>
 
 #include <iostream>
+#include <cmath>
 
 using namespace std;
 
@@ -282,16 +283,16 @@ void deserializeFloatType(IO::JSONArchive &ar, T1 sx, void (T2::*setProperty)(T3
 
 	FDSNXML::FloatType ft;
 
-	if ( !isnan(value) )
+	if ( !std::isnan(value) )
 		ft.setValue(value);
 
 	if ( unit.length() > 0 )
 		ft.setUnit(unit);
 
-	if ( !isnan(upperUncertainty) )
+	if ( !std::isnan(upperUncertainty) )
 		ft.setUpperUncertainty(upperUncertainty);
 
-	if ( !isnan(lowerUncertainty) )
+	if ( !std::isnan(lowerUncertainty) )
 		ft.setLowerUncertainty(lowerUncertainty);
 
 	if ( measurementMethod.length() > 0 )
@@ -374,9 +375,9 @@ void populateComments(const T1 *sc, T2 sx) {
 			sx_comment->setId(c+1);
 		sx_comment->setValue(comment->text());
 		try { sx_comment->setBeginEffectiveTime(FDSNXML::DateTime(comment->start())); }
-		catch ( Core::ValueException ) {}
+		catch ( Core::ValueException & ) {}
 		try { sx_comment->setEndEffectiveTime(FDSNXML::DateTime(comment->end())); }
-		catch ( Core::ValueException ) {}
+		catch ( Core::ValueException & ) {}
 
 		try {
 			DataModel::CreationInfo ci = comment->creationInfo();
@@ -402,7 +403,7 @@ void populateComments(const T1 *sc, T2 sx) {
 
 			sx_comment->addAuthor(author.get());
 		}
-		catch ( Core::ValueException ) {}
+		catch ( Core::ValueException & ) {}
 
 		sx->addComment(sx_comment.get());
 	}
@@ -699,11 +700,14 @@ FDSNXML::ResponseStagePtr convert(const DataModel::ResponsePolynomial *poly,
 	sx_poly.setInputUnits(FDSNXML::UnitsType(inputUnit, inputUnitDescription));
 	sx_poly.setOutputUnits(FDSNXML::UnitsType(outputUnit));
 
-	FDSNXML::ApproximationType at;
-	if ( at.fromString(poly->approximationType().c_str()) )
-		sx_poly.setApproximationType(at);
-	else
+	if ( poly->approximationType() == "M" ) {
 		sx_poly.setApproximationType(FDSNXML::AT_MACLAURIN);
+	}
+	else {
+		SEISCOMP_WARNING("Unknown polynomial response approximation type: %s: setting to MACLAURIN",
+		                 poly->approximationType().c_str());
+		sx_poly.setApproximationType(FDSNXML::AT_MACLAURIN);
+	}
 
 	try { sx_poly.setApproximationLowerBound(poly->approximationLowerBound()); }
 	catch ( ... ) { sx_poly.setApproximationLowerBound(0); }

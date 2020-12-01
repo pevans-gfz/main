@@ -81,8 +81,20 @@ typedef pair<string,FDSNXML::Channel*> ChannelEpoch;
 
 
 bool epochLowerThan(const ChannelEpoch &e1, const ChannelEpoch &e2) {
-	return e1.second->startDate() < e2.second->startDate();
+	try {
+		return e1.second->startDate() < e2.second->startDate();
+	}
+	catch ( ... ) {
+		// At least one start date is not set
+		try {
+			e2.second->startDate();
+			return true;
+		}
+		catch ( ... ) {}
+		return false;
+	}
 }
+
 
 typedef list<ChannelEpoch> Epochs;
 struct EpochEntry {
@@ -991,9 +1003,16 @@ DataModel::ResponsePolynomialPtr convert(const FDSNXML::ResponseStage *resp,
 	// Frequency unit is fixed at Hz.
 	// https://github.com/FDSN/StationXML/blob/v1.0/fdsn-station.xsd#L790
 	rp->setFrequencyUnit("B");
-	const char *atstr = poly->approximationType().toString();
-	if ( atstr != NULL )
-		rp->setApproximationType(atstr);
+	switch ( poly->approximationType() ) {
+		case FDSNXML::AT_MACLAURIN:
+			rp->setApproximationType("M");
+			break;
+		default:
+			SEISCOMP_WARNING("Unknown polynomial response approximation type: %s: ignoring",
+			                 poly->approximationType().toString());
+			break;
+	}
+
 	rp->setApproximationLowerBound(poly->approximationLowerBound());
 	rp->setApproximationUpperBound(poly->approximationUpperBound());
 
@@ -1096,14 +1115,14 @@ void serializeJSON(const FDSNXML::Identifier *identifier, IO::JSONArchive &ar) {
 		string type = identifier->type();
 		ar & NAMED_OBJECT_HINT("type", type, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		string value = identifier->value();
 		ar & NAMED_OBJECT_HINT("value", value, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 }
 
@@ -1113,14 +1132,14 @@ void serializeJSON(const FDSNXML::Operator *oper, IO::JSONArchive &ar) {
 		string agency = oper->agency();
 		ar & NAMED_OBJECT_HINT("agency", agency, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		string webSite = oper->webSite();
 		ar & NAMED_OBJECT_HINT("webSite", webSite, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	if ( oper->contactCount() > 0 ) {
@@ -1139,63 +1158,63 @@ void serializeJSON(const FDSNXML::Equipment *equipment, IO::JSONArchive &ar) {
 		string type = equipment->type();
 		ar & NAMED_OBJECT_HINT("type", type, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		string description = equipment->description();
 		ar & NAMED_OBJECT_HINT("description", description, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		string manufacturer = equipment->manufacturer();
 		ar & NAMED_OBJECT_HINT("manufacturer", manufacturer, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		string vendor = equipment->vendor();
 		ar & NAMED_OBJECT_HINT("vendor", vendor, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		string model = equipment->model();
 		ar & NAMED_OBJECT_HINT("model", model, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		string serialNumber = equipment->serialNumber();
 		ar & NAMED_OBJECT_HINT("serialNumber", serialNumber, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		string resourceId = equipment->resourceId();
 		ar & NAMED_OBJECT_HINT("resourceId", resourceId, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		Core::Time installationDate = equipment->installationDate();
 		ar & NAMED_OBJECT_HINT("installationDate", installationDate, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		Core::Time removalDate = equipment->removalDate();
 		ar & NAMED_OBJECT_HINT("removalDate", removalDate, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	if (equipment->calibrationDateCount() > 0 ) {
@@ -1214,35 +1233,35 @@ void serializeJSON(const FDSNXML::FloatType *ft, IO::JSONArchive &ar) {
 		double value = ft->value();
 		ar & NAMED_OBJECT_HINT("value", value, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		string unit = ft->unit();
 		ar & NAMED_OBJECT_HINT("unit", unit, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		double upperUncertainty = ft->upperUncertainty();
 		ar & NAMED_OBJECT_HINT("upperUncertainty", upperUncertainty, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		double lowerUncertainty = ft->lowerUncertainty();
 		ar & NAMED_OBJECT_HINT("lowerUncertainty", lowerUncertainty, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 
 	try {
 		string measurementMethod = ft->measurementMethod();
 		ar & NAMED_OBJECT_HINT("measurementMethod", measurementMethod, Core::Archive::STATIC_TYPE);
 	}
-	catch ( Core::ValueException ) {
+	catch ( Core::ValueException & ) {
 	}
 }
 
@@ -1294,7 +1313,7 @@ void populateJSON(const string &name, const T1 *sx, T2 sc, T3 (T4::*getObject)()
 			T3 object((sx->*getObject)());
 			serializeJSON(&object, ar);
 		}
-		catch ( Core::ValueException ) {
+		catch ( Core::ValueException & ) {
 			return;
 		}
 
@@ -1345,13 +1364,13 @@ void populateComments(const T1 *sx, T2 sc) {
 		FDSNXML::Comment *comment = sx->comment(c);
 		DataModel::CommentPtr sc_comment = new DataModel::Comment;
 		try { sc_comment->setId(Core::toString(comment->id())); }
-		catch ( Core::ValueException ) { sc_comment->setId(Core::toString(c+1)); }
+		catch ( Core::ValueException & ) { sc_comment->setId(Core::toString(c+1)); }
 
 		sc_comment->setText(comment->value());
 		try { sc_comment->setStart(comment->beginEffectiveTime()); }
-		catch ( Core::ValueException ) {}
+		catch ( Core::ValueException & ) {}
 		try { sc_comment->setEnd(comment->endEffectiveTime()); }
-		catch ( Core::ValueException ) {}
+		catch ( Core::ValueException & ) {}
 
 		if ( comment->authorCount() > 0 ) {
 			FDSNXML::Person *author = comment->author(0);

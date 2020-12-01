@@ -29,9 +29,10 @@
 from __future__ import absolute_import, division, print_function
 
 from twisted.internet.threads import deferToThread
-from twisted.web import http, resource, server
+from twisted.web import http, server
 
-import seiscomp.datamodel, seiscomp.logging
+import seiscomp.datamodel
+import seiscomp.logging
 from seiscomp.client import Application
 from seiscomp.io import DatabaseInterface, Exporter
 
@@ -87,10 +88,10 @@ class _EventRequestOptions(RequestOptions):
     PComments = ['includecomments', 'comments']
     PFormatted = ['formatted']
 
-    # SC3 knows more event types than QuakeML. Types unknown to QuakeML are
-    # mapped during the SC3 to QuakeML conversion. Since the FDNSWS standard
-    # defines both, the request and response type to be QuakeML some extra
-    # SC3 types need to be queried from the database.
+    # SeisComP knows more event types than QuakeML. Types unknown to QuakeML
+    # are mapped during the SeisComP to QuakeML conversion. Since the FDNSWS
+    # standard defines both, the request and response type to be QuakeML some
+    # extra SeisComP types need to be queried from the database.
     ExtraEventTypes = {
         seiscomp.datamodel.INDUCED_OR_TRIGGERED_EVENT: [
             seiscomp.datamodel.INDUCED_EARTHQUAKE
@@ -101,6 +102,13 @@ class _EventRequestOptions(RequestOptions):
             seiscomp.datamodel.OUTSIDE_OF_NETWORK_INTEREST
         ]
     }
+
+    GETParams = RequestOptions.GETParams + RequestOptions.GeoParams + \
+        RequestOptions.OutputParams + PMinDepth + PMaxDepth + PMinMag + \
+        PMaxMag + PMagType + PEventType + PAllOrigins + PAllMags + \
+        PArrivals + PEventID + PLimit + POffset + POrderBy + PContributor + \
+        PCatalog + PUpdateAfter + PPicks + PFM + PAllFMs + PStaMTs + \
+        PComments + PFormatted
 
     #---------------------------------------------------------------------------
     class Depth:
@@ -116,14 +124,14 @@ class _EventRequestOptions(RequestOptions):
             self.type = None
 
     #---------------------------------------------------------------------------
-    def __init__(self, args):
-        RequestOptions.__init__(self, args)
+    def __init__(self):
+        RequestOptions.__init__(self)
         self.service = 'fdsnws-event'
 
         self.depth = None
         self.mag = None
-        self.eventTypes = set()  # SC3 numeric event type ids, -1 is used for
-        # empty event types
+        self.eventTypes = set()  # SeisComP numeric event type ids, -1 is used
+                                 # for empty event types
 
         self.allOrigins = None
         self.allMags = None
@@ -162,7 +170,7 @@ class _EventRequestOptions(RequestOptions):
         d.max = self.parseFloat(self.PMaxDepth)
         if d.min is not None and d.max is not None and d.min > d.max:
             raise ValueError("%s exceeds %s" % (
-                              self.PMinDepth[0], self.PMaxDepth[0]))
+                self.PMinDepth[0], self.PMaxDepth[0]))
         if d.min is not None or d.max:
             self.depth = d
 
@@ -172,7 +180,7 @@ class _EventRequestOptions(RequestOptions):
         m.max = self.parseFloat(self.PMaxMag)
         if m.min is not None and m.max is not None and m.min > m.max:
             raise ValueError("%s exceeds %s" % (
-                             self.PMinMag[0], self.PMaxMag[0]))
+                self.PMinMag[0], self.PMaxMag[0]))
         key, m.type = self.getFirstValue(self.PMagType)
         if m.min is not None or m.max is not None or m.type is not None:
             self.mag = m
@@ -187,15 +195,16 @@ class _EventRequestOptions(RequestOptions):
                 self.eventTypes.add(-1)
             else:
                 try:
-                    sc3Type = seiscomp.datamodel.QMLTypeMapper.EventTypeFromString(t)
-                    self.eventTypes.add(sc3Type)
-                    # SC3 knows more event types than QuakeML. Types unknown to
-                    # QuakeML are mapped during the SC3 to QuakeML conversion.
-                    # Since the FDNSWS standard defines both, the request and
-                    # response type to be QuakeML some extra SC3 types need to
-                    # be queried from the database.
-                    if sc3Type in self.ExtraEventTypes:
-                        self.eventTypes.update(self.ExtraEventTypes[sc3Type])
+                    scType = seiscomp.datamodel.QMLTypeMapper.EventTypeFromString(t)
+                    self.eventTypes.add(scType)
+                    # SeisComP knows more event types than QuakeML. Types
+                    # unknown to QuakeML are mapped during the SeisComP to
+                    # QuakeML conversion. Since the FDNSWS standard defines
+                    # both, the request and response type to be QuakeML some
+                    # extra SeisComP types need to be queried from the
+                    # database.
+                    if scType in self.ExtraEventTypes:
+                        self.eventTypes.update(self.ExtraEventTypes[scType])
                 except ValueError:
                     raise ValueError("'%s' is not a valid QuakeML event type" \
                                      % t)
@@ -239,10 +248,10 @@ class _EventRequestOptions(RequestOptions):
         # eventID, MUST NOT be combined with above parameters
         if filterParams and self.eventIDs:
             raise ValueError("invalid mixture of parameters, the parameter " \
-                "'%s' may only be combined with: %s, %s, %s, %s, %s" % (
+                "'%s' may only be combined with: %s, %s, %s, %s, %s, %s, %s, %s" % (
                     self.PEventID[0], self.PAllOrigins[0], self.PAllMags[0],
                     self.PArrivals[0], self.PPicks[0], self.PFM[0],
-                    self.PAllFMs[0], self.PAllMTs[0], self.PComments[0]))
+                    self.PAllFMs[0], self.PStaMTs[0], self.PComments[0]))
 
         # format XML
         self.formatted = self.parseBool(self.PFormatted)
@@ -253,18 +262,19 @@ class FDSNEvent(BaseResource):
     isLeaf = True
 
     #---------------------------------------------------------------------------
-    def __init__(self, hideAuthor=False, evaluationMode=None,
-                 eventTypeWhitelist=None, eventTypeBlacklist=None,
-                 formatList=None):
+    def __init__(self, hideAuthor=False, hideComments=False,
+                 evaluationMode=None, eventTypeWhitelist=None,
+                 eventTypeBlacklist=None, formatList=None):
         BaseResource.__init__(self, VERSION)
         self._hideAuthor = hideAuthor
+        self._hideComments = hideComments
         self._evaluationMode = evaluationMode
         self._eventTypeWhitelist = eventTypeWhitelist
         self._eventTypeBlacklist = eventTypeBlacklist
         self._formatList = formatList
 
     #---------------------------------------------------------------------------
-    def render_OPTIONS(self, req):
+    def render_OPTIONS(self, req): #pylint: disable=R0201
         req.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
         req.setHeader('Access-Control-Allow-Headers',
                       'Accept, Content-Type, X-Requested-With, Origin')
@@ -274,8 +284,9 @@ class FDSNEvent(BaseResource):
     #---------------------------------------------------------------------------
     def render_GET(self, req):
         # Parse and validate GET parameters
-        ro = _EventRequestOptions(req.args)
+        ro = _EventRequestOptions()
         try:
+            ro.parseGET(req.args)
             ro.parse()
         except ValueError as e:
             seiscomp.logging.warning(str(e))
@@ -284,6 +295,10 @@ class FDSNEvent(BaseResource):
         # Catalog filter is not supported
         if ro.catalogs:
             msg = "catalog filter not supported"
+            return self.renderErrorPage(req, http.BAD_REQUEST, msg, ro)
+
+        if ro.comments and self._hideComments:
+            msg = "including of comments not supported"
             return self.renderErrorPage(req, http.BAD_REQUEST, msg, ro)
 
         # updateafter not implemented
@@ -324,7 +339,8 @@ class FDSNEvent(BaseResource):
         return server.NOT_DONE_YET
 
     #---------------------------------------------------------------------------
-    def _removeAuthor(self, obj):
+    @staticmethod
+    def _removeAuthor(obj):
         try:
             ci = obj.creationInfo()
             ci.setAuthor("")
@@ -343,7 +359,7 @@ class FDSNEvent(BaseResource):
     #---------------------------------------------------------------------------
     def _processRequestExp(self, req, ro, dbq, exp, ep):
         objCount = ep.eventCount()
-        maxObj = Application.Instance()._queryObjects
+        maxObj = Application.Instance()._queryObjects #pylint: disable=W0212
 
         if not self.checkObjects(req, objCount, maxObj):
             return False
@@ -354,7 +370,7 @@ class FDSNEvent(BaseResource):
 
         # add related information
         for iEvent in range(ep.eventCount()):
-            if req._disconnected:
+            if req._disconnected: #pylint: disable=W0212
                 return False
             e = ep.event(iEvent)
             if self._hideAuthor:
@@ -409,7 +425,7 @@ class FDSNEvent(BaseResource):
             # focal mechanisms: process before origins to add derived origin to
             # originID list since it may be missing from origin reference list
             for iFMRef in range(e.focalMechanismReferenceCount()):
-                if req._disconnected:
+                if req._disconnected: #pylint: disable=W0212
                     return False
                 fmID = e.focalMechanismReference(iFMRef).focalMechanismID()
                 obj = dbq.getObject(seiscomp.datamodel.FocalMechanism.TypeInfo(), fmID)
@@ -442,7 +458,7 @@ class FDSNEvent(BaseResource):
                         self._removeAuthor(mt)
 
                     if ro.comments:
-                        for iMT in range(fm.momentTensorCount()):
+                        for _ in range(fm.momentTensorCount()):
                             objCount += self._loadComments(dbq, mt)
 
                     objCount += dbq.loadDataUseds(mt)
@@ -469,7 +485,7 @@ class FDSNEvent(BaseResource):
 
             # origins
             for oID in sorted(originIDs):
-                if req._disconnected:
+                if req._disconnected: #pylint: disable=W0212
                     return False
                 obj = dbq.getObject(seiscomp.datamodel.Origin.TypeInfo(), oID)
                 o = seiscomp.datamodel.Origin.Cast(obj)
@@ -515,7 +531,7 @@ class FDSNEvent(BaseResource):
                 # arrivals
                 if ro.arrivals:
                     objCount += dbq.loadArrivals(o)
-                    if self._removeAuthor:
+                    if self._hideAuthor:
                         for iArrival in range(o.arrivalCount()):
                             self._removeAuthor(o.arrival(iArrival))
 
@@ -549,9 +565,9 @@ class FDSNEvent(BaseResource):
         sink = utils.Sink(req)
         if not exp.write(sink, ep):
             return False
-        seiscomp.logging.debug("%s: returned %i events and %i origins (total "
-                      "objects/chars: %i/%i)" % (ro.service, ep.eventCount(),
-                      ep.originCount(), objCount, sink.written))
+        seiscomp.logging.debug("%s: returned %i events and %i origins " \
+            "(total objects/chars: %i/%i)" % (
+                ro.service, ep.eventCount(), ep.originCount(), objCount, sink.written))
         utils.accessLog(req, ro, http.OK, sink.written, None)
         return True
 
@@ -577,8 +593,8 @@ class FDSNEvent(BaseResource):
             o = seiscomp.datamodel.Origin.Cast(obj)
             if o is None:
                 seiscomp.logging.warning(
-                            "preferred origin of event '%s' not found: "
-                            "%s" % (eID, e.preferredOriginID()))
+                    "preferred origin of event '%s' not found: %s" % (
+                        eID, e.preferredOriginID()))
                 continue
 
             # depth
@@ -634,26 +650,25 @@ class FDSNEvent(BaseResource):
             except ValueError:
                 eType = ''
 
-            if req._disconnected:
+            if req._disconnected: #pylint: disable=W0212
                 return False
             line = "%s|%s|%f|%f|%s|%s||%s|%s|%s|%s|%s|%s|%s\n" % (
-                   eID, o.time().value().toString(df), o.latitude().value(),
-                   o.longitude().value(), depth, author, contrib, eID,
-                   mType, mVal, mAuthor, region, eType)
+                eID, o.time().value().toString(df), o.latitude().value(),
+                o.longitude().value(), depth, author, contrib, eID, mType,
+                mVal, mAuthor, region, eType)
             utils.writeTS(req, line)
             lineCount += 1
             byteCount += len(line)
 
         # write response
-        seiscomp.logging.debug(
-                "%s: returned %i events (total bytes: %i) " % (
-                ro.service, lineCount, byteCount))
+        seiscomp.logging.debug("%s: returned %i events (total bytes: %i) " % (
+            ro.service, lineCount, byteCount))
         utils.accessLog(req, ro, http.OK, byteCount, None)
         return True
 
     #---------------------------------------------------------------------------
     def _processRequest(self, req, ro, dbq, exp):
-        if req._disconnected:
+        if req._disconnected: #pylint: disable=W0212
             return False
 
         seiscomp.datamodel.PublicObject.SetRegistrationEnabled(False)
@@ -675,10 +690,10 @@ class FDSNEvent(BaseResource):
                         pass
                     if self._eventTypeWhitelist and \
                        not eType in self._eventTypeWhitelist:
-                           continue
+                        continue
                     if self._eventTypeBlacklist and \
                        eType in self._eventTypeBlacklist:
-                           continue
+                        continue
 
                 if self._evaluationMode is not None:
                     obj = dbq.getObject(seiscomp.datamodel.Origin.TypeInfo(),
@@ -767,8 +782,8 @@ class FDSNEvent(BaseResource):
             types = self._eventTypeWhitelist.intersection(ro.eventTypes)
             if not types:
                 seiscomp.logging.debug(
-                        'all requested event types filtered by '
-                        'configured event type white list')
+                    'all requested event types filtered by configured event '
+                    'type white list')
                 return
         elif self._eventTypeWhitelist:
             types = self._eventTypeWhitelist
@@ -778,7 +793,8 @@ class FDSNEvent(BaseResource):
             allowNull = -1 in types
             types = [x for x in types if x >= 0]
 
-            etqIn = "e.%s IN ('%s')" % (_T('type'), "', '".join(seiscomp.datamodel.EEventTypeNames.name(x) for x in types))
+            etqIn = "e.%s IN ('%s')" % (_T('type'), "', '".join(
+                seiscomp.datamodel.EEventTypeNames.name(x) for x in types))
             if allowNull:
                 etqNull = "e.%s is NULL" % _T('type')
                 if types:
@@ -793,7 +809,8 @@ class FDSNEvent(BaseResource):
             allowNull = -1 not in self._eventTypeBlacklist
             types = [x for x in self._eventTypeBlacklist if x >= 0]
 
-            etqNotIn = "e.%s NOT IN ('%s')" % (_T('type'), "', '".join(seiscomp.datamodel.EEventTypeNames.name(x) for x in types))
+            etqNotIn = "e.%s NOT IN ('%s')" % (_T('type'), "', '".join(
+                seiscomp.datamodel.EEventTypeNames.name(x) for x in types))
             if allowNull:
                 etqNull = "e.%s is NULL" % _T('type')
                 if types:
@@ -806,8 +823,8 @@ class FDSNEvent(BaseResource):
         # event agency id filter
         if ro.contributors:
             q += " AND e.%s AND upper(e.%s) IN('%s')" % (
-                 _T('creationinfo_used'), _T('creationinfo_agencyid'),
-                 "', '".join(ro.contributors).upper())
+                _T('creationinfo_used'), _T('creationinfo_agencyid'),
+                "', '".join(ro.contributors).upper())
 
         # origin information filter
         q += " AND o._oid = po._oid AND po.%s = e.%s" % (
@@ -816,8 +833,9 @@ class FDSNEvent(BaseResource):
         # evaluation mode config parameter
         if self._evaluationMode is not None:
             colEvalMode = _T('evaluationMode')
-            q += " AND o.%s = '%s'" % (colEvalMode,
-                                       seiscomp.datamodel.EEvaluationModeNames.name(self._evaluationMode))
+            q += " AND o.%s = '%s'" % (
+                colEvalMode, seiscomp.datamodel.EEvaluationModeNames.name(
+                    self._evaluationMode))
 
         # time
         if ro.time:
@@ -826,12 +844,12 @@ class FDSNEvent(BaseResource):
                 t = _time(ro.time.start)
                 ms = ro.time.start.microseconds()
                 q += " AND (o.%s > '%s' OR (o.%s = '%s' AND o.%s >= %i))" % (
-                     colTime, t, colTime, t, colTimeMS, ms)
+                    colTime, t, colTime, t, colTimeMS, ms)
             if ro.time.end is not None:
                 t = _time(ro.time.end)
                 ms = ro.time.end.microseconds()
                 q += " AND (o.%s < '%s' OR (o.%s = '%s' AND o.%s <= %i))" % (
-                     colTime, t, colTime, t, colTimeMS, ms)
+                    colTime, t, colTime, t, colTimeMS, ms)
 
         # bounding box
         if bBox:
@@ -841,7 +859,7 @@ class FDSNEvent(BaseResource):
                 q += " AND o.%s <= %s" % (colLat, bBox.maxLat)
             if bBox.dateLineCrossing():
                 q += " AND (o.%s >= %s OR o.%s <= %s)" % (
-                     colLon, bBox.minLon, colLon, bBox.maxLon)
+                    colLon, bBox.minLon, colLon, bBox.maxLon)
             else:
                 if bBox.minLon is not None:
                     q += " AND o.%s >= %s" % (colLon, bBox.minLon)

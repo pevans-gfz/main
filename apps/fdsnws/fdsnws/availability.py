@@ -23,7 +23,7 @@ from twisted.web import http, resource, server
 
 from zope.interface import implementer
 
-import seiscomp.datamodel, seiscomp.io, seiscomp.logging
+from seiscomp import datamodel, io, logging
 from seiscomp.client import Application
 from seiscomp.core import Time
 
@@ -73,11 +73,11 @@ class _AvailabilityRequestOptions(RequestOptions):
 
     POSTParams = RequestOptions.POSTParams + PQuality + PMerge + POrderBy + \
                  PLimit + PIncludeRestricted
-
+    GETParams = RequestOptions.GETParams + POSTParams
 
     #--------------------------------------------------------------------------
-    def __init__(self, args=None):
-        RequestOptions.__init__(self, args)
+    def __init__(self):
+        RequestOptions.__init__(self)
 
         self.service = 'availability-base'
         self.quality = None
@@ -102,7 +102,7 @@ class _AvailabilityRequestOptions(RequestOptions):
                 if v[0] == '*':
                     self.quality = None
                     break
-                elif v[0].isupper():
+                if v[0].isupper():
                     if self.quality is None:
                         self.quality = [v]
                     else:
@@ -184,8 +184,8 @@ class _AvailabilityRequestOptions(RequestOptions):
 class _AvailabilityExtentRequestOptions(_AvailabilityRequestOptions):
 
     #--------------------------------------------------------------------------
-    def __init__(self, args=None):
-        _AvailabilityRequestOptions.__init__(self, args)
+    def __init__(self):
+        _AvailabilityRequestOptions.__init__(self)
         self.service = 'availability-extent'
 
         self.showLatestUpdate = True
@@ -224,10 +224,12 @@ class _AvailabilityQueryRequestOptions(_AvailabilityRequestOptions):
 
     POSTParams = _AvailabilityRequestOptions.POSTParams + PMergeGaps + \
                  PShow + PExcludeTooLarge
+    GETParams = _AvailabilityRequestOptions.GETParams + PMergeGaps + \
+                PShow + PExcludeTooLarge
 
     #--------------------------------------------------------------------------
-    def __init__(self, args=None):
-        _AvailabilityRequestOptions.__init__(self, args)
+    def __init__(self):
+        _AvailabilityRequestOptions.__init__(self)
         self.service = 'availability-query'
 
         self.orderBy = None
@@ -244,7 +246,7 @@ class _AvailabilityQueryRequestOptions(_AvailabilityRequestOptions):
         # show (optional)
         for v in self.getListValues(self.PShow, True):
             if v not in self.VShow:
-                self.raiseValueError(key)
+                self.raiseValueError(v)
             if v == self.VShowLatestUpdate:
                 self.showLatestUpdate = True
 
@@ -284,14 +286,15 @@ class _Availability(BaseResource):
     #--------------------------------------------------------------------------
     def render_GET(self, req):
         # Parse and validate GET parameters
-        ro = self._createRequestOptions(req.args)
+        ro = self._createRequestOptions()
         try:
+            ro.parseGET(req.args)
             ro.parse()
 
             # the GET operation supports exactly one stream filter
             ro.streams.append(ro)
         except ValueError as e:
-            seiscomp.logging.warning(str(e))
+            logging.warning(str(e))
             return self.renderErrorPage(req, http.BAD_REQUEST, str(e), ro)
 
         return self._prepareRequest(req, ro)
@@ -305,7 +308,7 @@ class _Availability(BaseResource):
             ro.parsePOST(req.content)
             ro.parse()
         except ValueError as e:
-            seiscomp.logging.warning(str(e))
+            logging.warning(str(e))
             return self.renderErrorPage(req, http.BAD_REQUEST, str(e), ro)
 
         return self._prepareRequest(req, ro)
@@ -341,7 +344,8 @@ class _Availability(BaseResource):
 
 
     #--------------------------------------------------------------------------
-    def _formatTime(self, time, ms=False):
+    @staticmethod
+    def _formatTime(time, ms=False):
         if ms:
             return '{0}.{1:06d}Z'.format(time.toString('%FT%T'),
                                          time.microseconds())
@@ -352,11 +356,11 @@ class _Availability(BaseResource):
     def _writeLines(self, req, lines, ro):
         if ro.format == ro.VFormatText:
             return self._writeFormatText(req, lines, ro)
-        elif ro.format == ro.VFormatGeoCSV:
+        if ro.format == ro.VFormatGeoCSV:
             return self._writeFormatGeoCSV(req, lines, ro)
-        elif ro.format == ro.VFormatJSON:
+        if ro.format == ro.VFormatJSON:
             return self._writeFormatJSON(req, lines, ro)
-        elif ro.format == ro.VFormatRequest:
+        if ro.format == ro.VFormatRequest:
             return self._writeFormatRequest(req, lines, ro)
 
         raise Exception("unknown reponse format: %s" % ro.format)
@@ -444,9 +448,8 @@ class _Availability(BaseResource):
                     end = ro.time.end
 
             data = '{0} {1} {2} {3} {4} {5}\n'.format(
-                   wid.networkCode(), wid.stationCode(), loc,
-                   wid.channelCode(), self._formatTime(start, True),
-                   self._formatTime(end, True))
+                wid.networkCode(), wid.stationCode(), loc, wid.channelCode(),
+                self._formatTime(start, True), self._formatTime(end, True))
 
             utils.writeTS(req, data)
             byteCount += len(data)
@@ -532,9 +535,6 @@ class _Availability(BaseResource):
 
     #--------------------------------------------------------------------------
     def _writeFormatJSON(self, req, lines, ro):
-        byteCount = 0
-        lineCount = 0
-
         header = '{{' \
             '"created":"{0}",' \
             '"version": 1.0,' \
@@ -594,12 +594,14 @@ class FDSNAvailabilityExtent(_Availability):
 
 
     #--------------------------------------------------------------------------
-    def _createRequestOptions(self, args=None):
-        return _AvailabilityExtentRequestOptions(args)
+    @staticmethod
+    def _createRequestOptions():
+        return _AvailabilityExtentRequestOptions()
 
 
     #--------------------------------------------------------------------------
-    def _mergeExtents(self, attributeExtents):
+    @staticmethod
+    def _mergeExtents(attributeExtents):
 
         merged = None
         cloned = False
@@ -612,7 +614,7 @@ class FDSNAvailabilityExtent(_Availability):
                 merged = e
             else:
                 if not cloned:
-                    merged = seiscomp.datamodel.DataAttributeExtent(merged)
+                    merged = datamodel.DataAttributeExtent(merged)
                     cloned = True
 
                 if e.start() < merged.start():
@@ -675,19 +677,14 @@ class FDSNAvailabilityExtent(_Availability):
         if req._disconnected:
             return False
 
-        data = ""
-        restriction = None
-
         # tuples: wid, attribute extent, restricted status
         lines = []
 
         mergeAll = ro.mergeQuality and ro.mergeSampleRate
         mergeNone = not ro.mergeQuality and not ro.mergeSampleRate
-        mergeOne = not mergeAll and not mergeNone
 
         # iterate extents
-        for ext, objID, restricted in ro.extentIter(dac, self.user,
-                                                    self.access):
+        for ext, _, restricted in ro.extentIter(dac, self.user, self.access):
             if req._disconnected:
                 return False
 
@@ -706,8 +703,8 @@ class FDSNAvailabilityExtent(_Availability):
                         eDict[e.sampleRate()].append(e)
                     else:
                         eDict[e.sampleRate()] = [e]
-                for k, v in eDict.items():
-                    e = self._mergeExtents(v)
+                for k in eDict:
+                    e = self._mergeExtents(eDict[k])
                     lines.append((ext, e, restricted))
             else:
                 eDict = {}  # key=quality
@@ -716,8 +713,8 @@ class FDSNAvailabilityExtent(_Availability):
                         eDict[e.quality()].append(e)
                     else:
                         eDict[e.quality()] = [e]
-                for k, v in eDict.items():
-                    e = self._mergeExtents(v)
+                for k in eDict:
+                    e = self._mergeExtents(eDict[k])
                     lines.append((ext, e, restricted))
 
         # Return 204 if no matching availability information was found
@@ -735,14 +732,15 @@ class FDSNAvailabilityExtent(_Availability):
 
         byteCount, extCount = self._writeLines(req, lines, ro)
 
-        seiscomp.logging.debug("%s: returned %i extents (total bytes: %i)" % (
-                      ro.service, extCount, byteCount))
+        logging.debug("%s: returned %i extents (total bytes: %i)" % (
+            ro.service, extCount, byteCount))
         utils.accessLog(req, ro, http.OK, byteCount, None)
         return True
 
 
     #--------------------------------------------------------------------------
-    def _sortLines(self, lines, ro):
+    @staticmethod
+    def _sortLines(lines, ro):
 
         def compareNSLC(l1, l2):
             if l1[0] is not l2[0]:
@@ -754,11 +752,11 @@ class FDSNAvailabilityExtent(_Availability):
 
             if e1.start() < e2.start():
                 return -1
-            elif e1.start() > e2.start():
+            if e1.start() > e2.start():
                 return 1
-            elif e1.end() < e2.end():
+            if e1.end() < e2.end():
                 return -1
-            elif e1.end() > e2.end():
+            if e1.end() > e2.end():
                 return 1
 
             if not ro.mergeQuality:
@@ -864,8 +862,9 @@ class FDSNAvailabilityQuery(_Availability):
 
 
     #--------------------------------------------------------------------------
-    def _createRequestOptions(self, args=None):
-        return _AvailabilityQueryRequestOptions(args)
+    @staticmethod
+    def _createRequestOptions():
+        return _AvailabilityQueryRequestOptions()
 
 
     #--------------------------------------------------------------------------
@@ -934,8 +933,7 @@ class FDSNAvailabilityQuery(_Availability):
                                             wid.locationCode(),
                                             wid.channelCode())
                         if ro.showLatestUpdate:
-                            data += updated.format(
-                                    self._formatTime(lastUpdate))
+                            data += updated.format(self._formatTime(lastUpdate))
                         utils.writeTS(req, data)
                         byteCount += len(data)
                         byteCount += writeSegments(segments)
@@ -1207,18 +1205,13 @@ class FDSNAvailabilityQuery(_Availability):
         # tuples: wid, segment, restricted status
         lines = []
 
-        mergeAll = ro.mergeQuality and ro.mergeSampleRate
-        mergeNone = not ro.mergeQuality and not ro.mergeSampleRate
-        mergeOne = not mergeAll and not mergeNone
-
         byteCount = 0
 
         # iterate extents and create IN clauses of parent_oids in bunches
         # of 1000 because the query size is limited
         parentOIDs, idList, tooLarge = [], [], []
         i = 0
-        for ext, objID, restricted in ro.extentIter(dac, self.user,
-                                                    self.access):
+        for ext, objID, _ in ro.extentIter(dac, self.user, self.access):
             if req._disconnected:
                 return False
 
@@ -1253,14 +1246,15 @@ class FDSNAvailabilityQuery(_Availability):
                   .format(extents)
             self.writeErrorPage(req, http.REQUEST_ENTITY_TOO_LARGE, msg, ro)
             return False
-        elif len(idList) > 0:
+
+        if len(idList) > 0:
             parentOIDs.append(idList)
         else:
             msg = "no matching availabilty information found"
             self.writeErrorPage(req, http.NO_CONTENT, msg, ro)
             return False
 
-        db = seiscomp.io.DatabaseInterface.Open(Application.Instance().databaseURI())
+        db = io.DatabaseInterface.Open(Application.Instance().databaseURI())
         if db is None:
             msg = "could not connect to database"
             return self.renderErrorPage(req, http.SERVICE_UNAVAILABLE, msg, ro)
@@ -1275,24 +1269,25 @@ class FDSNAvailabilityQuery(_Availability):
             self.writeErrorPage(req, http.NO_CONTENT, msg, ro)
             return True
 
-        seiscomp.logging.debug("%s: returned %i segments (total bytes: %i)" % (
-                      ro.service, segCount, byteCount))
+        logging.debug("%s: returned %i segments (total bytes: %i)" % (
+            ro.service, segCount, byteCount))
         utils.accessLog(req, ro, http.OK, byteCount, None)
 
         return True
 
 
     #--------------------------------------------------------------------------
-    def _lineIter(self, db, parentOIDs, req, ro, oIDs):
+    @staticmethod
+    def _lineIter(db, parentOIDs, req, ro, oIDs):
 
         def _T(name):
             return db.convertColumnName(name)
 
-        dba = seiscomp.datamodel.DatabaseArchive(db)
+        dba = datamodel.DatabaseArchive(db)
 
         for idList in parentOIDs:
             if req._disconnected:
-                raise StopIteration()
+                return
 
             # build SQL query
             q = 'SELECT * from DataSegment ' \
@@ -1323,9 +1318,9 @@ class FDSNAvailabilityQuery(_Availability):
             q += 'ORDER BY _parent_oid, {0}, {1}' \
                  .format(_T('start'), _T('start_ms'))
 
-            segIt = dba.getObjectIterator(q, seiscomp.datamodel.DataSegment.TypeInfo())
+            segIt = dba.getObjectIterator(q, datamodel.DataSegment.TypeInfo())
             if segIt is None or not segIt.valid():
-                raise StopIteration()
+                return
 
             # Iterate and optionally merge segments.
             # A segment will be yielded if
@@ -1342,7 +1337,7 @@ class FDSNAvailabilityQuery(_Availability):
             lines = 0
             while not req._disconnected and (seg is None or segIt.next()) and \
                   (not ro.limit or lines < ro.limit):
-                s = seiscomp.datamodel.DataSegment.Cast(segIt.get())
+                s = datamodel.DataSegment.Cast(segIt.get())
                 if s is None:
                     break
 
@@ -1350,7 +1345,7 @@ class FDSNAvailabilityQuery(_Availability):
                 try:
                     e, restricted = oIDs[segIt.parentOid()]
                 except KeyError:
-                    seiscomp.logging.warning("parent object id not found: %i",
+                    logging.warning("parent object id not found: %i",
                                     segIt.parentOid())
                     continue
 
@@ -1386,9 +1381,9 @@ class FDSNAvailabilityQuery(_Availability):
             if seg is not None and (not ro.limit or lines < ro.limit):
                 yield (ext, seg, restricted)
 
-            # close database iterator if iteration was stopped because of 
+            # close database iterator if iteration was stopped because of
             # row limit
-            raise StopIteration()
+            return
 
 
 # vim: ts=4 et tw=79
