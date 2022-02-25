@@ -107,6 +107,7 @@
     </property>
     <addaction name="actionShowSummary" />
     <addaction name="actionShowStations" />
+    <addaction name="actionShowStationAnnotations" />
     <addaction name="actionShowEventList" />
    </widget>
    <widget class="QMenu" name="menuEdit" >
@@ -165,6 +166,26 @@
    </property>
    <property name="shortcut" >
     <string>F9</string>
+   </property>
+  </action>
+  <action name="actionShowStationAnnotations" >
+   <property name="checkable" >
+    <bool>true</bool>
+   </property>
+   <property name="checked" >
+    <bool>false</bool>
+   </property>
+   <property name="text" >
+    <string>Show station annotations</string>
+   </property>
+   <property name="iconText" >
+    <string>Show station annotations</string>
+   </property>
+   <property name="toolTip" >
+    <string>Show station annotations</string>
+   </property>
+   <property name="shortcut" >
+    <string>Shift+F9</string>
    </property>
   </action>
   <action name="actionShowEventList" >
@@ -238,26 +259,6 @@
     <string>Ctrl+Shift+Z</string>
    </property>
   </action>
-  <action name="actionPreviousEvent" >
-   <property name="enabled" >
-    <bool>true</bool>
-   </property>
-   <property name="icon" >
-    <iconset/>
-   </property>
-   <property name="text" >
-    <string>Previous event</string>
-   </property>
-   <property name="iconText" >
-    <string>Previous event</string>
-   </property>
-   <property name="toolTip" >
-    <string>Load previous event of the event list</string>
-   </property>
-   <property name="shortcut" >
-    <string>Ctrl+PgUp</string>
-   </property>
-  </action>
   <action name="actionNextEvent" >
    <property name="enabled" >
     <bool>true</bool>
@@ -272,7 +273,27 @@
     <string>Next event</string>
    </property>
    <property name="toolTip" >
-    <string>Go to next event of the event list</string>
+    <string>Load next event from the event list</string>
+   </property>
+   <property name="shortcut" >
+    <string>Ctrl+PgUp</string>
+   </property>
+  </action>
+  <action name="actionPreviousEvent" >
+   <property name="enabled" >
+    <bool>true</bool>
+   </property>
+   <property name="icon" >
+    <iconset/>
+   </property>
+   <property name="text" >
+    <string>Previous event</string>
+   </property>
+   <property name="iconText" >
+    <string>Previous event</string>
+   </property>
+   <property name="toolTip" >
+    <string>Load previous event from the event list</string>
    </property>
    <property name="shortcut" >
     <string>Ctrl+PgDown</string>

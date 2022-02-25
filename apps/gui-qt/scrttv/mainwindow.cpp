@@ -29,6 +29,7 @@
 #include <seiscomp/utils/keyvalues.h>
 #include <seiscomp/math/geo.h>
 #include <seiscomp/utils/timer.h>
+#include <seiscomp/seismology/regions.h>
 #include <seiscomp/gui/core/recordviewitem.h>
 #include <seiscomp/gui/core/application.h>
 #include <seiscomp/gui/core/scheme.h>
@@ -51,11 +52,34 @@ using namespace Seiscomp::IO;
 using namespace Seiscomp::DataModel;
 
 
+#define DATA_INDEX 0
+#define DATA_DELTA 1
+#define DATA_GROUP 2
+#define DATA_GROUP_MEMBER 3
+#define DATA_GROUP_INDEX 4
+
+
 namespace {
 
 
 bool isWildcard(const string &s) {
 	return s.find('*') != string::npos || s.find('?') != string::npos;
+}
+
+
+WaveformStreamID makeWaveformID(const std::string &net,
+                                const std::string &sta,
+                                const std::string &loc = std::string(),
+                                const std::string &cha = std::string()) {
+	return WaveformStreamID(net, sta, loc, cha, "");
+}
+
+
+bool compare(const WaveformStreamID &pattern, const WaveformStreamID &id) {
+	return Core::wildcmp(pattern.networkCode(), id.networkCode())
+	   and Core::wildcmp(pattern.stationCode(), id.stationCode())
+	   and Core::wildcmp(pattern.locationCode(), id.locationCode())
+	   and Core::wildcmp(pattern.channelCode(), id.channelCode());
 }
 
 
@@ -406,6 +430,7 @@ MainWindow::MainWindow() : _questionApplyChanges(this) {
 	_currentFilterIdx = -1;
 	_autoApplyFilter = false;
 	_allowTimeWindowExtraction = true;
+	_needColorUpdate = false;
 
 	_statusBarFile   = new QLabel;
 	_statusBarFilter = new QLabel(" Filter OFF ");
@@ -448,6 +473,7 @@ MainWindow::MainWindow() : _questionApplyChanges(this) {
 	connect(_ui.actionSortDistance, SIGNAL(triggered()), this, SLOT(sortByDistance()));
 	connect(_ui.actionSortStaCode, SIGNAL(triggered()), this, SLOT(sortByStationCode()));
 	connect(_ui.actionSortNetStaCode, SIGNAL(triggered()), this, SLOT(sortByNetworkStationCode()));
+	connect(_ui.actionSortGroup, SIGNAL(triggered()), this, SLOT(sortByGroup()));
 
 	connect(_ui.actionAlignLeft, SIGNAL(triggered()), this, SLOT(alignLeft()));
 	connect(_ui.actionAlignRight, SIGNAL(triggered()), this, SLOT(alignRight()));
@@ -587,6 +613,68 @@ MainWindow::MainWindow() : _questionApplyChanges(this) {
 		}
 	}
 	catch ( ... ) {}
+
+	try {
+		auto groups = SCApp->configGetStrings("streams.groups");
+		for ( const auto &groupProfile : groups) {
+			ChannelGroup group;
+			try {
+				auto members = SCApp->configGetStrings("streams.group." + groupProfile + ".members");
+				for ( const auto &member : members ) {
+					vector<string> toks;
+					Core::split(toks, member, ".", false);
+					if ( toks.size() > 4 ) {
+						SEISCOMP_WARNING("Invalid group member '%s' in channel group '%s': "
+						                 "expected not more than 4 tokens separated with dot: ignoring",
+						                 member.c_str(), groupProfile.c_str());
+						continue;
+					}
+
+					switch ( toks.size() ) {
+						case 1:
+							group.members.push_back(makeWaveformID(toks[0], "*", "*", "*"));
+							break;
+						case 2:
+							group.members.push_back(makeWaveformID(toks[0], toks[1], "*", "*"));
+							break;
+						case 3:
+							group.members.push_back(makeWaveformID(toks[0], toks[1], toks[2], "*"));
+							break;
+						case 4:
+							group.members.push_back(makeWaveformID(toks[0], toks[1], toks[2], toks[3]));
+							break;
+						default:
+							break;
+					}
+				}
+			}
+			catch ( ... ) {
+				SEISCOMP_WARNING("Empty station group '%s': no members defined: ignoring",
+				                 groupProfile.c_str());
+			}
+
+			try {
+				group.title = SCApp->configGetString("streams.group." + groupProfile + ".title");
+			}
+			catch ( ... ) {}
+
+			try {
+				group.regionName = SCApp->configGetString("streams.group." + groupProfile + ".region");
+			}
+			catch ( ... ) {}
+
+			group.pen.setColor(QColor());
+			group.pen = SCApp->configGetPen("streams.group." + groupProfile + ".pen", group.pen);
+
+			try {
+				group.gradient = SCApp->configGetColorGradient("streams.group." + groupProfile + ".pen.gradient", group.gradient);
+			}
+			catch ( ... ) {}
+
+			_channelGroups.push_back(group);
+		}
+	}
+	catch ( ... ) {}
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -627,11 +715,29 @@ void MainWindow::start() {
 	else
 		openAcquisition();
 
+	double lat = 0.0;
+	double lon = 0.0;
 	try {
-		double lat = Gui::Application::Instance()->configGetDouble("streams.sort.latitude");
-		double lon = Gui::Application::Instance()->configGetDouble("streams.sort.longitude");
+		lat = Gui::Application::Instance()->configGetDouble("streams.sort.latitude");
+	}
+	catch ( ... ) {}
+	try {
+		lon = Gui::Application::Instance()->configGetDouble("streams.sort.longitude");
+	}
+	catch ( ... ) {}
 
-		sortByOrigin(lat, lon);
+	try {
+		string sortMode = SCApp->configGetString("streams.sort.mode");
+		if ( sortMode == "config" )
+			sortByConfig();
+		else if ( sortMode == "distance" )
+			sortByOrigin(lat, lon);
+		else if ( sortMode == "station" )
+			sortByStationCode();
+		else if ( sortMode == "network" )
+			sortByNetworkStationCode();
+		else if ( sortMode == "group" )
+			sortByGroup();
 	}
 	catch ( ... ) {}
 }
@@ -1110,6 +1216,54 @@ void MainWindow::setupItem(const Record*, Gui::RecordViewItem* item) {
 		break;
 	}
 
+	item->setValue(DATA_GROUP, 0);
+	item->setValue(DATA_GROUP_MEMBER, 0);
+
+	for ( size_t s = 0; s < _channelGroups.size(); ++s ) {
+		auto &group = _channelGroups[s];
+		int memberIndex = 0;
+
+		for ( size_t i = 0; i < group.members.size(); ++i ) {
+			if ( compare(group.members[i], streamID) ) {
+				memberIndex = -int(group.members.size()-i);
+				break;
+			}
+		}
+
+		if ( !memberIndex ) {
+			bool insideRegion = false;
+
+			if ( item->data().canConvert<TraceState>() ) {
+				Seiscomp::Client::StationLocation loc = item->data().value<TraceState>().location;
+
+				// Check if the region filter matches
+				if ( !group.regionName.empty() ) {
+					if ( Regions::getRegionName(loc.latitude, loc.longitude) == group.regionName ) {
+						insideRegion = true;
+					}
+				}
+			}
+
+			if ( !insideRegion ) continue;
+		}
+
+		item->setValue(DATA_GROUP, -int(_channelGroups.size()-s));
+		item->setValue(DATA_GROUP_INDEX, group.numberOfUsedChannels);
+		item->setValue(DATA_GROUP_MEMBER, memberIndex);
+		if ( group.pen.color().isValid() )
+			item->widget()->setRecordPen(0, group.pen);
+		if ( !group.title.empty() )
+			item->setToolTip(group.title.c_str());
+
+		if ( !group.gradient.isEmpty() )
+			_needColorUpdate = true;
+
+		// Increase number of used channels
+		++group.numberOfUsedChannels;
+
+		break;
+	}
+
 	item->widget()->showScaledValues(_ui.actionApplyGain->isChecked());
 
 	if ( !_scaleMap.contains(streamID) ) {
@@ -1332,6 +1486,7 @@ void MainWindow::openFile(const std::vector<std::string> &files) {
 
 	setBufferSize(tw.length());
 	alignRight();
+	colorByConfig();
 
 	_traceViews.front()->setUpdatesEnabled(true);
 }
@@ -1486,13 +1641,50 @@ void MainWindow::openAcquisition() {
 
 		QRectF regionRect;
 
+		double latMin = -90.0;
+		double latMax = 90.0;
+		double lonMin = -180.0;
+		double lonMax = 180.0;
 		try {
-			double lonMin = Gui::Application::Instance()->configGetDouble("streams.region.lonmin");
-			double lonMax = Gui::Application::Instance()->configGetDouble("streams.region.lonmax");
-			double latMin = Gui::Application::Instance()->configGetDouble("streams.region.latmin");
-			double latMax = Gui::Application::Instance()->configGetDouble("streams.region.latmax");
+			lonMin = Gui::Application::Instance()->configGetDouble("streams.region.lonmin");
+		}
+		catch ( ... ) {
+		}
+		try {
+			lonMax = Gui::Application::Instance()->configGetDouble("streams.region.lonmax");
+		}
+		catch ( ... ) {
+		}
+		try {
+			latMin = Gui::Application::Instance()->configGetDouble("streams.region.latmin");
+		}
+		catch ( ... ) {
+		}
+		try {
+			latMax = Gui::Application::Instance()->configGetDouble("streams.region.latmax");
+		}
+		catch ( ... ) {
+		}
 
-			regionRect.setRect(lonMin, latMin, lonMax-lonMin, latMax-latMin);
+		if ( lonMin > 180 ) {
+			lonMin -= 360.0;
+		}
+		if ( lonMin < -180 ) {
+			lonMin += 360.0;
+		}
+		if ( lonMax > 180 ) {
+			lonMax -= 360.0;
+		}
+		if ( lonMax < -180 ) {
+			lonMax += 360.0;
+		}
+		double latDelta = 0.0;
+		latDelta = lonMax-lonMin;
+		if ( latDelta < 0 ) {
+			latDelta += 360.;
+		}
+		try {
+			regionRect.setRect(lonMin, latMin, latDelta, latMax-latMin);
 		}
 		catch ( ... ) {
 		}
@@ -1659,11 +1851,6 @@ void MainWindow::openAcquisition() {
 			pal.setColor(QPalette::HighlightedText, QColor(128,128,128));
 			item->widget()->setPalette(pal);
 
-			setupItem(NULL, item);
-
-			item->setValue(0, (*it).index);
-			item->setValue(1, 0.0);
-
 			//of << waveformIDToString((*it).first).toStdString() << endl;
 
 			/*
@@ -1673,15 +1860,23 @@ void MainWindow::openAcquisition() {
 
 			try {
 				TraceState state;
-				state.location = Seiscomp::Client::Inventory::Instance()->stationLocation(it->streamID.networkCode(),
-				                                                         it->streamID.stationCode(),
-				                                                         _originTime);
+				state.location = Seiscomp::Client::Inventory::Instance()->stationLocation(
+					it->streamID.networkCode(),
+					it->streamID.stationCode(),
+					_originTime
+				);
+
 				QVariant d;
 				d.setValue(state);
 
 				item->setData(d);
 			}
 			catch ( ... ) {}
+
+			setupItem(NULL, item);
+
+			item->setValue(DATA_INDEX, (*it).index);
+			item->setValue(DATA_DELTA, 0.0);
 
 			SCApp->showMessage(QString("Added %1/%2 streams")
 			                   .arg(count+1)
@@ -1697,6 +1892,7 @@ void MainWindow::openAcquisition() {
 		}
 
 		sortByConfig();
+		colorByConfig();
 		TRACEVIEWS(show());
 	}
 	else {
@@ -2210,7 +2406,43 @@ void MainWindow::sortByNetworkStationCode() {
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void MainWindow::sortByConfig() {
 	_switchBack->stop();
-	TRACEVIEWS(sortByValue(0));
+	TRACEVIEWS(sortByValue(DATA_INDEX));
+}
+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
+
+
+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+void MainWindow::colorByConfig() {
+	if ( !_needColorUpdate ) return;
+
+	foreach ( TraceView* view, _traceViews ) {
+		int count = view->rowCount();
+		for ( int i = 0; i < count; ++i ) {
+			RecordViewItem *item = view->itemAt(i);
+			int ig = int(item->value(DATA_GROUP));
+			if ( ig >= 0 ) continue;
+			ig += int(_channelGroups.size());
+			const ChannelGroup &group = _channelGroups[ig];
+			if ( group.gradient.isEmpty() ) continue;
+
+			QPen p = group.pen;
+
+			if ( group.numberOfUsedChannels < 2 ) {
+				p.setColor(group.gradient.begin().value().first);
+			}
+			else {
+				double rangeMin = group.gradient.begin().key();
+				double rangeMax = (--group.gradient.end()).key();
+				p.setColor(group.gradient.colorAt(rangeMin + (rangeMax - rangeMin) * item->value(DATA_GROUP_INDEX) / double(group.numberOfUsedChannels - 1)));
+			}
+
+			item->widget()->setRecordPen(0, p);
+		}
+	}
+
+	_needColorUpdate = false;
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -2220,7 +2452,18 @@ void MainWindow::sortByConfig() {
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void MainWindow::sortByDistance() {
 	_switchBack->stop();
-	TRACEVIEWS(sortByValue(1));
+	TRACEVIEWS(sortByValue(DATA_DELTA, DATA_INDEX));
+	//TRACEVIEWS(sortByValue(DATA_GROUP, DATA_DELTA, DATA_GROUP_MEMBER, DATA_INDEX));
+}
+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
+
+
+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+void MainWindow::sortByGroup() {
+	_switchBack->stop();
+	TRACEVIEWS(sortByValue(DATA_GROUP, DATA_GROUP_MEMBER, DATA_INDEX));
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -2279,6 +2522,8 @@ void MainWindow::clearPickMarkers() {
 void MainWindow::step() {
 	static int stepper = 0;
 
+	colorByConfig();
+
 	if ( _ui.actionToggleAutoMove->isChecked() && !_endTime )
 		TRACEVIEWS(setAlignment(Core::Time::GMT()));
 
@@ -2315,7 +2560,7 @@ void MainWindow::sortByOrigin(double lat, double lon) {
 			Math::Geo::delazi(lat, lon, loc.latitude, loc.longitude,
 			                  &delta, &az1, &az2);
 	
-			item->setValue(1, delta);
+			item->setValue(DATA_DELTA, delta);
 		}
 	}
 

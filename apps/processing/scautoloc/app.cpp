@@ -18,6 +18,7 @@
 #include <seiscomp/logging/log.h>
 #include <seiscomp/client/inventory.h>
 #include <seiscomp/datamodel/eventparameters.h>
+#include <seiscomp/datamodel/journaling_package.h>
 #include <seiscomp/datamodel/utils.h>
 #include <seiscomp/utils/files.h>
 #include <seiscomp/core/datamessage.h>
@@ -49,10 +50,10 @@ namespace Autoloc {
 App::App(int argc, char **argv)
 : Application(argc, argv), Autoloc3()
 , objectCount(0)
-, _inputPicks(NULL)
-, _inputAmps(NULL)
-, _inputOrgs(NULL)
-, _outputOrgs(NULL)
+, _inputPicks(nullptr)
+, _inputAmps(nullptr)
+, _inputOrgs(nullptr)
+, _outputOrgs(nullptr)
 {
 	setMessagingEnabled(true);
 
@@ -97,15 +98,19 @@ void App::createCommandLineDescription() {
 
 	commandline().addGroup("Settings");
 	commandline().addOption("Settings", "station-locations", "The station-locations.conf file to use when in offline mode. If no file is given the database is used.", &_stationLocationFile, false);
-	commandline().addOption("Settings", "station-config", "The station.conf file", &_config.staConfFile, false);
-	commandline().addOption("Settings", "pick-log", "The pick log file", &_config.pickLogFile, false);
-	commandline().addOption("Settings", "grid", "The grid.conf file to use", &_gridConfigFile, false);
+	commandline().addOption("Settings", "station-config", "The station configuration file", &_config.staConfFile, false);
+	commandline().addOption("Settings", "grid", "The grid configuration file", &_gridConfigFile, false);
+	commandline().addOption("Settings", "pick-log", "The pick log file. Providing a "
+	                        "file name enables logging picks even when disabled by configuration.",
+	                        &_config.pickLogFile, false);
 
-	commandline().addOption("Settings", "default-depth", "", &_config.defaultDepth);
+	commandline().addOption("Settings", "default-depth", "Default depth for locating", &_config.defaultDepth);
 	commandline().addOption("Settings", "default-depth-stickiness", "", &_config.defaultDepthStickiness);
-	commandline().addOption("Settings", "max-sgap", "", &_config.maxAziGapSecondary);
-	commandline().addOption("Settings", "max-rms", "", &_config.maxRMS);
-	commandline().addOption("Settings", "max-residual", "", &_config.maxResidualUse);
+	commandline().addOption("Settings", "max-sgap", "Maximum secondary azimuthal gap", &_config.maxAziGapSecondary);
+	commandline().addOption("Settings", "max-rms", "Maximum RMS residual"
+	                        "to be considered", &_config.maxRMS);
+	commandline().addOption("Settings", "max-residual", "Maximum travel-time residual"
+	                        "per station to be considered", &_config.maxResidualUse);
 	commandline().addOption("Settings", "max-station-distance", "Maximum distance of stations to be used", &_config.maxStaDist);
 	commandline().addOption("Settings", "max-nucleation-distance-default", "Default maximum distance of stations to be used for nucleating new origins", &_config.defaultMaxNucDist);
 	commandline().addOption("Settings", "min-pick-affinity", "", &_config.minPickAffinity);
@@ -204,6 +209,10 @@ bool App::validateParameters() {
 
 	_config.maxResidualKeep = 3*_config.maxResidualUse;
 
+	if ( !_config.pickLogFile.empty() ) {
+		_config.pickLogEnable = true;
+	}
+
 	return Client::Application::validateParameters();
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -215,33 +224,39 @@ bool App::validateParameters() {
 bool App::initConfiguration() {
 	if ( !Client::Application::initConfiguration() ) return false;
 
-	// support depreciated configuration, depreciated since 2020-11-16
+	// support deprecated configuration, deprecated since 2020-11-16
 	try {
 		_config.maxAge = configGetDouble("autoloc.maxAge");
-		SEISCOMP_ERROR("Configuration parameter autoloc.maxAge is depreciated."
-		                 " Use buffer.pickKeep instead!");
+		SEISCOMP_ERROR("Configuration parameter autoloc.maxAge is deprecated."
+		               " Use buffer.pickKeep instead!");
 	}
 	catch (...) {}
-	// override depreciated configuration if value is set
+	// override deprecated configuration if value is set
 	try { _config.maxAge = configGetDouble("buffer.pickKeep"); }
 	catch (...) {}
 
-	// support depreciated configuration, depreciated since 2020-11-16
+	try {
+		_config.authors = configGetStrings("autoloc.authors");
+	}
+	catch (...) {}
+
+
+	// support deprecated configuration, deprecated since 2020-11-16
 	try {
 		_keepEventsTimeSpan = configGetInt("keepEventsTimeSpan");
-		SEISCOMP_ERROR("Configuration parameter keepEventsTimeSpan is depreciated."
-		                 " Use buffer.originKeep instead!");
+		SEISCOMP_ERROR("Configuration parameter keepEventsTimeSpan is deprecated."
+		               " Use buffer.originKeep instead!");
 	}
 	catch ( ... ) {}
-	// override depreciated configuration if value is set
+	// override deprecated configuration if value is set
 	try { _keepEventsTimeSpan = configGetInt("buffer.originKeep"); }
 	catch ( ... ) {}
 
 
-	// support depreciated configuration, depreciated since 2020-11-16
+	// support deprecated configuration, deprecated since 2020-11-16
 	try { _config.cleanupInterval = configGetDouble("autoloc.cleanupInterval");
-		SEISCOMP_ERROR("Configuration parameter autoloc.cleanupInterval is depreciated."
-		                 " Use buffer.cleanupIntervalinstead!");}
+		SEISCOMP_ERROR("Configuration parameter autoloc.cleanupInterval is deprecated."
+		               " Use buffer.cleanupIntervalinstead!");}
 	catch (...) {}
 	try { _config.cleanupInterval = configGetDouble("buffer.cleanupInterval"); }
 	catch (...) {}
@@ -382,6 +397,12 @@ bool App::initConfiguration() {
 	try { _config.pickLogFile = configGetString("autoloc.pickLog"); }
 	catch (...) { _config.pickLogFile = ""; }
 
+	try { _config.pickLogEnable = configGetBool("autoloc.pickLogEnable"); }
+	catch (...) { _config.pickLogEnable = false; }
+	if ( !_config.pickLogEnable ) {
+		_config.pickLogFile = "";
+	}
+
 	try { _amplTypeSNR = configGetString("autoloc.amplTypeSNR"); }
 	catch (...) {}
 
@@ -391,14 +412,15 @@ bool App::initConfiguration() {
 	try { _stationLocationFile = configGetString("autoloc.stationLocations"); }
 	catch (...) {}
 
-	// support depreciated configuration, depreciated since 2020-11-13
-	try { _config.locatorProfile = configGetString("autoloc.locator.profile"); }
-	catch (...) {}
-	if ( !_config.locatorProfile.empty() ) {
-		SEISCOMP_ERROR("Configuration parameter autoloc.locator.profile is depreciated."
+	// support deprecated configuration, deprecated since 2020-11-13
+	try {
+		_config.locatorProfile = configGetString("autoloc.locator.profile");
+		SEISCOMP_ERROR("Configuration parameter autoloc.locator.profile is deprecated."
 		                 " Use locator.profile instead!");
 	}
-	// override depreciated configuration if value is set
+	catch (...) {}
+
+	// override deprecated configuration if value is set
 	try { _config.locatorProfile = configGetString("locator.profile"); }
 	catch (...) {}
 
@@ -455,25 +477,24 @@ bool App::init() {
 	if ( ! initInventory() )
 		return false;
 
-	setPickLogFilePrefix(_config.pickLogFile);
+	if ( !_config.pickLogFile.empty() ) {
+		setPickLogFilePrefix(_config.pickLogFile);
+	}
 
 	if ( _config.playback ) {
 		if ( _inputEPFile.empty() ) {
 			// XML playback, set timer to 1 sec
-			SEISCOMP_DEBUG("Playback mode - enable timer of 1 sec");
 			enableTimer(1);
 		}
 	}
 	else {
 		// Read historical preferred origins in case we missed something
 		readHistoricEvents();
-
 		if ( _wakeUpTimout > 0 ) {
-			SEISCOMP_DEBUG("Enable timer of %d secs", _wakeUpTimout);
 			enableTimer(_wakeUpTimout);
 		}
 	}
-	
+
 	return Autoloc3::init();
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -543,14 +564,14 @@ bool App::initOneStation(const DataModel::WaveformStreamID &wfid, const Core::Ti
 					continue;
 				epochStart = station->start().toString("%FT%TZ");
 			}
-			catch ( ... ) { } 
+			catch ( ... ) { }
 
 			try {
 				if (time > station->end())
 					continue;
 				epochEnd = station->end().toString("%FT%TZ");
 			}
-			catch ( ... ) { } 
+			catch ( ... ) { }
 
 			SEISCOMP_DEBUG("Station %s %s epoch %s ... %s",
 			               network->code().c_str(),
@@ -1060,6 +1081,14 @@ bool App::feed(DataModel::Pick *sc3pick) {
 
 	}
 
+	const std::string &author = objectAuthor(sc3pick);
+	const int priority = _authorPriority(author);
+	SEISCOMP_INFO("pick '%s' from author '%s' has priority %d", pickID.c_str(), author.c_str(), priority);
+	if (priority == 0) {
+		SEISCOMP_INFO("pick '%s' not processed", pickID.c_str());
+		return false;
+	}
+
 	try {
 		if (sc3pick->evaluationMode() == DataModel::MANUAL) {
 		}
@@ -1263,10 +1292,42 @@ bool App::_report(const ::Autoloc::Origin *origin) {
 	DataModel::NotifierMessagePtr nmsg = DataModel::Notifier::GetMessage(true);
 	connection()->send(nmsg.get());
 
-	if (origin->preliminary )
+	if ( origin->preliminary ) {
 		SEISCOMP_INFO("Sent preliminary origin %ld (heads up)", origin->id);
-	else
+
+		// create and send journal entry
+		string str = "";
+		try {
+			str = sc3origin->evaluationStatus().toString();
+		}
+		catch ( Core::ValueException & ) {}
+
+		if ( !str.empty() ) {
+			DataModel::JournalEntryPtr journalEntry = new DataModel::JournalEntry;
+			journalEntry->setAction("OrgEvalStatOK");
+			journalEntry->setObjectID(sc3origin->publicID());
+			journalEntry->setSender(SCCoreApp->author().c_str());
+			journalEntry->setParameters(str);
+			journalEntry->setCreated(Core::Time::GMT());
+
+			DataModel::NotifierMessagePtr jm = new DataModel::NotifierMessage;
+			jm->attach(new DataModel::Notifier(DataModel::Journaling::ClassName(),
+			           DataModel::OP_ADD, journalEntry.get()));
+
+			if ( connection()->send(jm.get()) ) {
+				SEISCOMP_DEBUG("Sent origin journal entry for origin %s to the message group: %s",
+				               sc3origin->publicID().c_str(), primaryMessagingGroup().c_str());
+			}
+			else {
+				SEISCOMP_ERROR("Sending origin journal entry failed with error: %s",
+				               connection()->lastError().toString());
+			}
+		}
+
+	}
+	else {
 		SEISCOMP_INFO("Sent origin %ld", origin->id);
+	}
 
 	SEISCOMP_INFO_S(::Autoloc::printOrigin(origin, false));
 

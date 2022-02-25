@@ -164,7 +164,7 @@ const double NA_VALUE    = -999999.0;
 
 #endif
 
-#define NaN_FLOAT std::numeric_limits<float>::quiet_NaN()
-#define NaN_DOUBLE std::numeric_limits<double>::quiet_NaN()
+static const float			NaN_FLOAT = std::numeric_limits<float>::quiet_NaN();
+static const double			NaN_DOUBLE = std::numeric_limits<double>::quiet_NaN();
 
 #endif /* CPPGLOBALS_H_ */

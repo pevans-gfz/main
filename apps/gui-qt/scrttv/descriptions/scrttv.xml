@@ -20,7 +20,7 @@
 					If enabled, picks are shown.
 				</description>
 			</parameter>
-			<parameter name="filter" type="string" default="BW(3, 0.5, 10.0)">
+			<parameter name="filter" type="string" default="&quot;RMHP(2)>>ITAPER(5)>>BW(3,0.5,8.0)&quot;">
 				<description>
 					Defines the filter to be used when filtering is activated. This
 					is only being used if filters is not set otherwise it is
@@ -52,20 +52,33 @@
 					independent of data availability.
 				</description>
 			</parameter>
+			<parameter name="autoResetDelay" type="int" unit="s" default="900">
+				<description>
+					Time span in seconds to switch back to the last view after an origin
+					caused resorting. The default is 15min.
+				</description>
+			</parameter>
 			<group name="streams">
 				<group name="sort">
 					<description>
-						Configures an initial location (latitude, longitude) to be used
-						for sorting the traces.
+						Configures the initial stream sorting.
 					</description>
-					<parameter name="latitude" type="double" unit="deg">
+					<parameter name="mode" type="string" default="distance">
 						<description>
-							Latitude of the initial location.
+							The sort mode applied initially. Allowed values
+							are: config, distance, station, network, group.
 						</description>
 					</parameter>
-					<parameter name="longitude" type="double" unit="deg">
+					<parameter name="latitude" type="double" unit="deg" default="0.0">
 						<description>
-							Longitude of the initial location.
+							Latitude of the initial location for sorting traces.
+							Only valid if mode == distance.
+						</description>
+					</parameter>
+					<parameter name="longitude" type="double" unit="deg" default="0.0">
+						<description>
+							Longitude of the initial location for sorting traces.
+							Only valid if mode == distance.
 						</description>
 					</parameter>
 				</group>
@@ -105,34 +118,105 @@
 					<description>
 						Defines a region used for clipping requested stations.
 					</description>
-					<parameter name="lonmin" type="double" unit="deg">
+					<parameter name="lonmin" type="double" unit="deg" default="-180.0">
 						<description>
 							Minimum longitude.
 						</description>
 					</parameter>
-					<parameter name="lonmax" type="double" unit="deg">
+					<parameter name="lonmax" type="double" unit="deg" default="180.0">
 						<description>
 							Maximum longitude.
 						</description>
 					</parameter>
-					<parameter name="latmin" type="double" unit="deg">
+					<parameter name="latmin" type="double" unit="deg" default="-90.0">
 						<description>
 							Minimum latitude.
 						</description>
 					</parameter>
-					<parameter name="latmax" type="double" unit="deg">
+					<parameter name="latmax" type="double" unit="deg" default="90.0">
 						<description>
 							Maximum latitude.
 						</description>
 					</parameter>
 				</group>
+				<parameter name="groups" type="string" default="">
+					<description>
+					Stream group profiles to be considered. Use comma separation for
+					a list of groups.
+					</description>
+				</parameter>
+				<group name="group">
+					<description>
+					Definiton of stream groups shown in scrttv with unique features.
+					Register the profiles in &quot;groups&quot; to apply them.
+					</description>
+					<struct type="Stream group profile" link="streams.groups">
+						<parameter name="members" type="list:string">
+							<description>
+							List of channels codes to be displayed within
+							this group. List items may contain wildcards at any position
+							and are separated by comma.
+							The list is	intersected with all channels configured in inventory.
+
+							Example:
+
+							CX.*..BH?,PF.BON.00.HH? : all BH streams of the CX network
+							and all HH streams of PF.BON.00
+							</description>
+						</parameter>
+						<parameter name="title" type="string">
+							<description>
+							Title of the group visible as a tooltip of the traces.
+							</description>
+						</parameter>
+						<group name="pen">
+							<description>
+							Defines the trace pen of the group.
+							</description>
+							<parameter name="color" type="color">
+								<description>
+								The color of the pen. If not given, the default
+								trace color is being used. The parameter is overridden
+								by &quot;streams.group.$profile.gradient&quot; .
+								</description>
+							</parameter>
+							<parameter name="gradient" type="gradient">
+								<description>
+								Defines the color gradient used to generate the
+								trace color for each group member. When given, the
+								value in &quot;streams.group.$profile.pen.color&quot;
+								is ignored. The colors are distributed equally and
+								given in hexadecimal representation or by or
+								:term:`color keyword names`.
+								The stop points
+								can be set at any value. The final trace color
+								will be interpolated from the normalized gradient
+								where the value range is scaled to [0,1].
+
+								Format: value1:color1,value2:color2
+
+								Examples:
+
+								0:yellow,1:green
+
+								0:FFBF00,1:C70039
+								</description>
+							</parameter>
+							<parameter name="style" type="string" default="SolidLine">
+								<description>
+								The style of the pen. Supported values are: NoPen,
+								SolidLine, DashLine, DotLine, DashDotLine, DashDotDotLine.
+								</description>
+							</parameter>
+							<parameter name="width" type="double" default="1.0">
+								<description>
+								The width of the pen.
+								</description>
+							</parameter>
+						</group>
+					</struct>
+				</group>
 			</group>
-			<parameter name="autoResetDelay" type="int" unit="s" default="900">
-				<description>
-					Time span in seconds to switch back to the last view after an origin
-					caused resorting. The default is 15min.
-				</description>
-			</parameter>
 		</configuration>
 		<command-line>
 			<group name="Generic">

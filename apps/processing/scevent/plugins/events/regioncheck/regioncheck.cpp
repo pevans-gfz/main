@@ -27,10 +27,10 @@
 #include <seiscomp/logging/log.h>
 #include <seiscomp/datamodel/event.h>
 #include <seiscomp/datamodel/origin.h>
+#include <seiscomp/datamodel/journalentry.h>
 #include <seiscomp/seismology/regions.h>
 
-ADD_SC_PLUGIN("Region check for events that sets the event type to \"outside of network interest\" "
-              "if the location is outside preconfigured regions",
+ADD_SC_PLUGIN("evrc for scevent: Set event type by region check",
               "Jan Becker, Dirk Roessler, gempa GmbH <jabe@gempa.de>", 0, 1, 0)
 
 using namespace std;
@@ -71,6 +71,21 @@ bool RegionCheckProcessor::setup(const Config::Config &config) {
 
 	_hasPositiveRegions = false;
 	_hasNegativeRegions = false;
+
+	try {
+		_setEventType = config.getBool("rc.setEventType");
+	}
+	catch ( ... ) {}
+
+	try {
+		_overwriteEventType = config.getBool("rc.overwriteEventType");
+	}
+	catch ( ... ) {}
+
+	try {
+		_overwriteManual = config.getBool("rc.overwriteManual");
+	}
+	catch ( ... ) {}
 
 	try { _readEventTypeFromBNA = config.getBool("rc.readEventTypeFromBNA"); }
 	catch ( ... ) {
@@ -194,22 +209,52 @@ bool RegionCheckProcessor::setup(const Config::Config &config) {
 }
 
 
-bool RegionCheckProcessor::process(Event *event) {
+bool RegionCheckProcessor::process(Event *event, const Journal &journal) {
 	Origin *org = Origin::Find(event->preferredOriginID());
 
 	SEISCOMP_DEBUG("evrc plugin: processing event %s",
-				   event->publicID().c_str());
+	               event->publicID().c_str());
+
+	if ( !_setEventType ) {
+		SEISCOMP_DEBUG(" + evrc: setting event type is "
+		               "disabled by configuration");
+		return false;
+	}
+
+	OPT(DataModel::EventType) currentType;
+	try {
+		currentType = event->type();
+	}
+	catch ( ... ) { }
+
+	if ( currentType && !_overwriteEventType ) {
+		SEISCOMP_DEBUG(" + evrc: overwriting event type is "
+		               "disabled by configuration");
+		return false;
+	}
+
+	bool isTypeFixed = false;
+
+	for ( Journal::const_iterator it = journal.begin(); it != journal.end(); ++it ) {
+		if ( (*it)->action() != "EvType" ) continue;
+		isTypeFixed = !(*it)->parameters().empty();
+	}
+
+	if ( isTypeFixed && !_overwriteManual ) {
+		SEISCOMP_DEBUG(" + evrc: type of event %s set through journal: ignoring",
+		               event->publicID().c_str());
+		return false;
+	}
+
 	if ( !org ) {
 		SEISCOMP_WARNING(" + evrc: no origin information found");
 		return false;
 	}
 
 	try {
-		if ( org->evaluationMode() == DataModel::MANUAL ){
-			SEISCOMP_DEBUG(" + evrc: found %s preferred origin %s: "
-						   "do not change the event status",
-						   org->evaluationMode().toString(),
-						   org->publicID().c_str());
+		if ( org->evaluationMode() == DataModel::MANUAL && !_overwriteManual ){
+			SEISCOMP_DEBUG(" + evrc: found %s preferred origin %s. Do not set event type.",
+			               org->evaluationMode().toString(), org->publicID().c_str());
 			return false;
 		}
 	}
@@ -219,7 +264,7 @@ bool RegionCheckProcessor::process(Event *event) {
 
 	try {
 		location.set(static_cast<float>(org->latitude().value()),
-					 static_cast<float>(org->longitude().value()));
+		             static_cast<float>(org->longitude().value()));
 	}
 	catch ( ... ) {
 		SEISCOMP_WARNING(" + evrc: no lat/lon information available");
@@ -230,24 +275,17 @@ bool RegionCheckProcessor::process(Event *event) {
 	try {
 		depth = org->depth().value();
 		SEISCOMP_DEBUG(" + evrc: checking regions for location %f / %f / %.2f km",
-					   static_cast<double>(location.lat),
-					   static_cast<double>(location.lon),
-					   *depth);
+		               static_cast<double>(location.lat),
+		               static_cast<double>(location.lon), *depth);
 	}
 	catch ( const ValueException& ) {
 		SEISCOMP_DEBUG(" + evrc: checking regions for location %f / %f / - km",
-					   static_cast<double>(location.lat),
-					   static_cast<double>(location.lon));
+		               static_cast<double>(location.lat),
+		               static_cast<double>(location.lon));
 	}
 
-	OPT(EventType) currentType;
 	OPT(EventType) eventType;
 	EventType tmp;
-
-	try {
-		currentType = event->type();
-	}
-	catch ( ... ) {}
 
 	bool isInside = false;
 	bool useWorld = false;

@@ -57,6 +57,9 @@ class StationConfig {
 class Autoloc3 {
 
 	public:
+		typedef std::vector<std::string> StringList;
+
+	public:
 		Autoloc3();
 		virtual ~Autoloc3();
 
@@ -64,6 +67,10 @@ class Autoloc3 {
 		class Config {
 		public:
 			Config();
+
+			// White list of allowed pick authors.
+			// Also defines priority in descending order.
+			StringList authors;
 
 			// During cleanup() all objects older than maxAge
 			// (in hours) are removed.
@@ -190,11 +197,12 @@ class Autoloc3 {
 			bool useManualPicks;
 
 			// The pick log file
-			std::string pickLogFile;
+			bool        pickLogEnable{false};
+			std::string pickLogFile{""};
 			int         pickLogDate;
 
 			// locator profile, e.g. "iasp91", "tab" etc.
-			std::string locatorProfile;
+			std::string locatorProfile{"iasp91"};
 
 			// The station configuration file
 			std::string staConfFile;
@@ -202,12 +210,12 @@ class Autoloc3 {
 			// misc. experimental options
 			bool aggressivePKP;
 			bool reportAllPhases;
-			bool useManualOrigins;
+			bool useManualOrigins{false};
 			bool adoptManualOriginsFixedDepth;
 			bool useImportedOrigins;
 
 			// enable the XXL feature
-			bool xxlEnabled;
+			bool xxlEnabled{false};
 
 			// minimum absolute amplitude to flag a pick as XXL
 			double xxlMinAmplitude;            // default  10000 nm/s
@@ -298,6 +306,11 @@ class Autoloc3 {
 		// flush any pending (Origin) messages by calling _report()
 		void _flush();
 
+		// Compute author priority. First in list gets highest
+		// priority. Not in list gets priority 0. No priority list
+		// defined gives 1 for all authors.
+		int _authorPriority(const std::string &author) const;
+
 	private:
 		//
 		// tool box
@@ -328,7 +341,7 @@ class Autoloc3 {
 		// Really big outliers, where the assiciation obviously
 		// went wrong and which are excluded from the location
 		// anyway, are removed.
-		// 
+		//
 		// Returns number of removed outliers.
 		int _removeWorstOutliers(Origin *);
 
@@ -347,7 +360,7 @@ class Autoloc3 {
 		//
 		// TODO:
 		// * see if there are distant stations which due to a
-		//   large number of near stations can be ignored 
+		//   large number of near stations can be ignored
 		//     -> useful to get rid of PKP
 		//
 		// TODO:
@@ -361,7 +374,7 @@ class Autoloc3 {
 
 		// true, if this pick was marked as bad and must not be used
 		bool _blacklisted(const Pick *) const;
-	
+
 		// true if pick comes with valid station info
 		bool _addStationInfo(const Pick *);
 

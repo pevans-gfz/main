@@ -29,7 +29,7 @@ else:
 from seiscomp.fdsnws.utils import py3bstr # pylint: disable=C0413
 
 ###############################################################################
-class FDSNWSTest:
+class FDSNWSTest(object):
 
     #--------------------------------------------------------------------------
     def __init__(self, port=8080):
@@ -230,37 +230,60 @@ class FDSNWSTest:
 
 
     #--------------------------------------------------------------------------
-    def testGET(self, url, contentType='text/html', ignoreRanges=None,
-                concurrent=False, retCode=200, testID=None, auth=False,
-                data=None, dataFile=None, diffContent=True, silent=False):
+    def testHTTP(self, url, contentType='text/html', ignoreRanges=None,
+                 concurrent=False, retCode=200, testID=None, auth=False,
+                 data=None, dataFile=None, diffContent=True, silent=False,
+                 postData=None, reqHeaders=None, respHeaders=None):
         if concurrent:
-            self.testGETConcurrent(url, contentType, data, dataFile, retCode,
-                                   testID, ignoreRanges, auth, diffContent)
+            self.testHTTPConcurrent(url, contentType, data, dataFile, retCode,
+                                    testID, ignoreRanges, auth, diffContent,
+                                    postData, reqHeaders=reqHeaders,
+                                    respHeaders=respHeaders)
         else:
-            self.testGETOneShot(url, contentType, data, dataFile, retCode,
-                                testID, ignoreRanges, auth, diffContent,
-                                silent)
+            self.testHTTPOneShot(url, contentType, data, dataFile, retCode,
+                                 testID, ignoreRanges, auth, diffContent,
+                                 silent, postData, reqHeaders=reqHeaders,
+                                 respHeaders=respHeaders)
 
 
     #--------------------------------------------------------------------------
-    def testGETOneShot(self, url, contentType='text/html', data=None,
-                       dataFile=None, retCode=200, testID=None,
-                       ignoreRanges=None, auth=False, diffContent=True,
-                       silent=False):
+    def testHTTPOneShot(self, url, contentType='text/html', data=None,
+                        dataFile=None, retCode=200, testID=None,
+                        ignoreRanges=None, auth=False, diffContent=True,
+                        silent=False, postData=None, reqHeaders=None,
+                        respHeaders=None):
         if not silent:
             if testID is not None:
                 print('#{} '.format(testID), end='')
             print('{}: '.format(url), end='')
         stream = dataFile is not None
         dAuth = requests.auth.HTTPDigestAuth('sysop', 'sysop') if auth else None
-        r = requests.get(url, stream=stream, auth=dAuth)
+        if postData is None:
+            r = requests.get(url, stream=stream, auth=dAuth, headers=reqHeaders)
+        else:
+            r = requests.post(url, data=postData, stream=stream, auth=dAuth,
+                              headers=reqHeaders)
+
         if r.status_code != retCode:
             raise ValueError('Invalid status code, expected "{}", got "{}"' \
                              .format(retCode, r.status_code))
 
-        if contentType != r.headers['content-type']:
+        if contentType is not None and contentType != r.headers['content-type']:
             raise ValueError('Invalid content type, expected "{}", got "{}"' \
                              .format(contentType, r.headers['content-type']))
+
+        if respHeaders is not None:
+            # validate response headers
+            for k, v in respHeaders.items():
+                if k not in r.headers:
+                    raise ValueError(
+                        'Missing response header field: {!r}'.format(k))
+                if callable(v) and v(r.headers[k]):
+                    continue
+                if v != r.headers[k]:
+                    raise ValueError(
+                        'Invalid response header field value: {!r} != {!r}'.format(
+                            v, r.headers[k]))
 
         expected = None
         if data is not None:
@@ -288,10 +311,11 @@ class FDSNWSTest:
 
 
     #--------------------------------------------------------------------------
-    def testGETConcurrent(self, url, contentType='text/html', data=None,
-                          dataFile=None, retCode=200, testID=None,
-                          ignoreRanges=None, auth=False, diffContent=True,
-                          repetitions=1000, numThreads=10):
+    def testHTTPConcurrent(self, url, contentType='text/html', data=None,
+                           dataFile=None, retCode=200, testID=None,
+                           ignoreRanges=None, auth=False, diffContent=True,
+                           postData=None, repetitions=1000, numThreads=10,
+                           reqHeaders=None, respHeaders=None):
         if testID is not None:
             print('#{} '.format(testID), end='')
         print('concurrent [{}/{}] {}: '.format(repetitions, numThreads, url),
@@ -304,9 +328,11 @@ class FDSNWSTest:
                     i = q.get()
                     if i is None:
                         break
-                    self.testGETOneShot(url, contentType, data, dataFile,
-                                        retCode, testID, ignoreRanges, auth,
-                                        diffContent, True)
+                    self.testHTTPOneShot(url, contentType, data, dataFile,
+                                         retCode, testID, ignoreRanges, auth,
+                                         diffContent, True, postData,
+                                         reqHeaders=reqHeaders,
+                                         respHeaders=respHeaders)
                     print('.', end='')
                     sys.stdout.flush()
                 except ValueError as e:

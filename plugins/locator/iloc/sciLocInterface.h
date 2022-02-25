@@ -194,7 +194,7 @@ typedef struct iLocConfig {
     int UseRSTTPnSn;                          /* use RSTT Pn/Sn predictions */
     int UseRSTTPgLg;                          /* use RSTT Pg/Lg predictions */
     int UseRSTT;                                    /* use RSTT predictions */
-    char LocalVmodel[ILOC_VALLEN];         /* name for local velocity model */
+    char LocalVmodel[ILOC_FILENAMELEN];/* pathname for local velocity model */
     double MaxLocalTTDelta;             /* use local TT up to this distance */
     int UseLocalTT;                             /* use local TT predictions */
 /*
@@ -425,6 +425,8 @@ typedef struct AssociatedPhase {
     double ArrivalTime;                            /* arrival epoch time [s] */
     double Deltim;           /* a priori time measurement error estimate [s] */
     int userDeltim;                             /* user provided Deltim if 1 */
+    double rsttTotalErr;     /* RSTT path-dependent (model + pick) error [s] */
+    double rsttPickErr;                               /* RSTT pick error [s] */
     double TimeRes;                                     /* time residual [s] */
     int Timedef;                    /* user: do not use in the location if 0 */
     double BackAzimuth;           /* measured station-to-event azimuth [deg] */
@@ -617,8 +619,8 @@ typedef struct TravelTimeInfo {
 typedef struct TTtables {
     char Phase[ILOC_PHALEN];                                       /* phase */
     int isbounce;                         /* surface reflection or multiple */
-	int	ndel;                                 /* number of distance samples */
-	int	ndep;                                    /* number of depth samples */
+    int ndel;                                 /* number of distance samples */
+    int ndep;                                    /* number of depth samples */
     double *depths;                                   /* depth samples [km] */
     double *deltas;                               /* distance samples [deg] */
     double **tt;                                   /* travel-time table [s] */

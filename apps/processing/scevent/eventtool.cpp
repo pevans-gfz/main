@@ -189,8 +189,8 @@ EventTool::EventTool(int argc, char **argv) : Application(argc, argv) {
 	_cache.setPopCallback(boost::bind(&EventTool::removedFromCache, this, _1));
 
 	_infoChannel = SEISCOMP_DEF_LOGCHANNEL("processing/info", Logging::LL_INFO);
-	_infoOutput = new Logging::FileRotatorOutput(Environment::Instance()->logFile("scevent-processing-info").c_str(),
-	                                             60*60*24, 30);
+	string logFile = Environment::Instance()->logFile(_name + "-processing-info");
+	_infoOutput = new Logging::FileRotatorOutput(logFile.c_str(), 60*60*24, 30);
 	_infoOutput->subscribe(_infoChannel);
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -282,9 +282,9 @@ bool EventTool::initConfiguration() {
 	try { _config.maxDist = configGetDouble("eventAssociation.maximumDistance"); } catch (...) {}
 
 	try { _config.minMwCount = configGetInt("eventAssociation.minMwCount"); } catch (...) {}
-
 	try { _config.mbOverMwCount = configGetInt("eventAssociation.mbOverMwCount"); } catch (...) {}
 	try { _config.mbOverMwValue = configGetDouble("eventAssociation.mbOverMwValue"); } catch (...) {}
+	try { _config.magPriorityOverStationCount = configGetBool("eventAssociation.magPriorityOverStationCount"); } catch (...) {}
 
 	try { _config.eventIDPrefix = configGetString("eventIDPrefix"); } catch (...) {}
 	try { _config.eventIDPattern = configGetString("eventIDPattern"); } catch (...) {}
@@ -445,7 +445,7 @@ bool EventTool::init() {
 				}
 
 				SEISCOMP_INFO("Processor '%s' added", it->c_str());
-				_processors[*it] = proc;
+				_processors.push_back(proc);
 			}
 		}
 
@@ -844,8 +844,14 @@ void EventTool::addObject(const string &parentID, Object* object) {
 			if ( org != mag->origin() )
 				org->add(mag);
 
-			SEISCOMP_LOG(_infoChannel, "Received new magnitude %s (%s %.2f)",
-			             mag->publicID().c_str(), mag->type().c_str(), mag->magnitude().value());
+			try {
+				SEISCOMP_LOG(_infoChannel, "Received new magnitude %s (%s %.2f)",
+				             mag->publicID().c_str(), mag->type().c_str(), mag->magnitude().value());
+			}
+			catch ( ... ) {
+				SEISCOMP_LOG(_infoChannel, "Received new magnitude %s (%s -.--)",
+				             mag->publicID().c_str(), mag->type().c_str());
+			}
 
 			_updates.insert(TodoEntry(org));
 		}
@@ -1024,8 +1030,15 @@ void EventTool::updateObject(const std::string &parentID, Object* object) {
 		logObject(_inputMagnitude, Core::Time::GMT());
 		if ( !mag->registered() )
 			mag = Magnitude::Find(mag->publicID());
-		SEISCOMP_LOG(_infoChannel, "Received updated magnitude %s (%s %.2f)",
-		             mag->publicID().c_str(), mag->type().c_str(), mag->magnitude().value());
+		try {
+			SEISCOMP_LOG(_infoChannel, "Received updated magnitude %s (%s %.2f)",
+			             mag->publicID().c_str(), mag->type().c_str(), mag->magnitude().value());
+		}
+		catch ( ... ) {
+			SEISCOMP_LOG(_infoChannel, "Received updated magnitude %s (%s -.--)",
+			             mag->publicID().c_str(), mag->type().c_str());
+		}
+
 		org = _cache.get<Origin>(parentID);
 		if ( org )
 			_updates.insert(TodoEntry(org, mag));
@@ -1345,7 +1358,7 @@ bool EventTool::handleJournalEntry(DataModel::JournalEntry *entry) {
 				}
 
 				Notifier::Enable();
-				updateEvent(info->event.get());
+				updateEvent(info.get());
 				Notifier::Disable();
 			}
 		}
@@ -1379,7 +1392,7 @@ bool EventTool::handleJournalEntry(DataModel::JournalEntry *entry) {
 					response = createEntry(entry->objectID(), entry->action() + OK, ":unset:");
 				}
 				Notifier::Enable();
-				updateEvent(info->event.get());
+				updateEvent(info.get());
 				Notifier::Disable();
 			}
 		}
@@ -1436,7 +1449,7 @@ bool EventTool::handleJournalEntry(DataModel::JournalEntry *entry) {
 			}
 		}
 		Notifier::Enable();
-		updateEvent(info->event.get());
+		updateEvent(info.get());
 		Notifier::Disable();
 	}
 	else if ( entry->action() == "EvPrefMw" ) {
@@ -1707,6 +1720,13 @@ bool EventTool::handleJournalEntry(DataModel::JournalEntry *entry) {
 				}
 			}
 		}
+	}
+	else if ( entry->action() == "EvRefresh" ) {
+		response = createEntry(entry->objectID(), entry->action() + OK, ":refreshing:");
+
+		Notifier::Enable();
+		updatePreferredOrigin(info.get(), true);
+		Notifier::Disable();
 	}
 	// Is this command ours by starting with Ev?
 	else if ( !entry->action().empty() && (entry->action().compare(0, 2,"Ev") == 0) ) {
@@ -2458,22 +2478,57 @@ Magnitude *EventTool::preferredMagnitude(Origin *origin) {
 			if ( isAgencyIDBlocked(objectAgencyID(mag)) ) continue;
 
 			int priority = goodness(mag, mbcount, mbval, _config);
-			if ( priority <= 0 )
+			if ( priority <= 0 ) {
 				continue;
+			}
 
-			if ( isMw(mag) ) {
-				if ( (stationCount(mag) > goodCount)
-				  || ((stationCount(mag) == goodCount) && (priority > goodPriority)) ) {
-					goodPriority = priority;
-					goodCount = stationCount(mag);
-					goodMag = mag;
+			if ( _config.magPriorityOverStationCount ) {
+				// Priority rules out the station count. A network
+				// magnitude with lower station count can become preferred if
+				// its priority is higher.
+				// Station count is only taken into account if the priority is
+				// equal.
+				if ( isMw(mag) ) {
+					if ( (priority > goodPriority)
+					  || ((priority == goodPriority) && (stationCount(mag) > goodCount)) ) {
+						goodPriority = priority;
+						goodCount = stationCount(mag);
+						goodMag = mag;
+					}
+				}
+				else {
+					// No Mw
+					if ( (priority > fallbackPriority)
+					  || ((priority == fallbackPriority) && (stationCount(mag) > fallbackCount)) ) {
+						fallbackPriority = priority;
+						fallbackCount = stationCount(mag);
+						fallbackMag = mag;
+					}
 				}
 			}
-			else if ( (stationCount(mag) > fallbackCount)
-			       || ((stationCount(mag) == fallbackCount) && (priority > fallbackPriority)) ) {
-				fallbackPriority = priority;
-				fallbackCount = stationCount(mag);
-				fallbackMag = mag;
+			else {
+				// Station count rules out priority. A network
+				// magnitude with lower priority can become preferred if
+				// its station count is higher.
+				// Priority is only taken into account when the station count
+				// is equal.
+				if ( isMw(mag) ) {
+					if ( (stationCount(mag) > goodCount)
+					  || ((stationCount(mag) == goodCount) && (priority > goodPriority)) ) {
+						goodPriority = priority;
+						goodCount = stationCount(mag);
+						goodMag = mag;
+					}
+				}
+				else {
+					// No Mw
+					if ( (stationCount(mag) > fallbackCount)
+					  || ((stationCount(mag) == fallbackCount) && (priority > fallbackPriority)) ) {
+						fallbackPriority = priority;
+						fallbackCount = stationCount(mag);
+						fallbackMag = mag;
+					}
+				}
 			}
 		}
 		catch ( ValueException& ) {
@@ -2617,7 +2672,7 @@ bool EventTool::removeCachedEvent(const std::string &eventID) {
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void EventTool::choosePreferred(EventInformation *info, Origin *origin,
                                 DataModel::Magnitude *triggeredMag,
-                                bool realOriginUpdate) {
+                                bool realOriginUpdate, bool refresh) {
 	Magnitude *mag = nullptr;
 	MagnitudePtr momentMag;
 
@@ -2674,7 +2729,8 @@ void EventTool::choosePreferred(EventInformation *info, Origin *origin,
 		mag = preferredMagnitude(origin);
 	}
 
-	bool update = false;
+	bool update = refresh;
+	bool needRegionNameUpdate = refresh;
 
 	if ( !info->preferredOrigin ) {
 		if ( isAgencyIDAllowed(objectAgencyID(origin)) || info->constraints.fixOrigin(origin) ) {
@@ -2685,7 +2741,7 @@ void EventTool::choosePreferred(EventInformation *info, Origin *origin,
 			SEISCOMP_LOG(_infoChannel, "Origin %s has been set preferred in event %s",
 			             origin->publicID().c_str(), info->event->publicID().c_str());
 
-			updateRegionName(info->event.get(), origin);
+			needRegionNameUpdate = true;
 
 			info->preferredOrigin = origin;
 			update = true;
@@ -3214,7 +3270,7 @@ void EventTool::choosePreferred(EventInformation *info, Origin *origin,
 		SEISCOMP_LOG(_infoChannel, "Origin %s has been set preferred in event %s",
 		             origin->publicID().c_str(), info->event->publicID().c_str());
 
-		updateRegionName(info->event.get(), origin);
+		needRegionNameUpdate = true;
 
 		info->preferredOrigin = origin;
 
@@ -3256,15 +3312,18 @@ void EventTool::choosePreferred(EventInformation *info, Origin *origin,
 		SEISCOMP_INFO("%s: nothing to do", info->event->publicID().c_str());
 	}
 
+	if ( needRegionNameUpdate ) {
+		updateRegionName(info->event.get(), info->preferredOrigin.get());
+	}
+
 	bool callProcessors = true;
 
 	// If only the magnitude changed, call updated processors
 	if ( !update && triggeredMag && !realOriginUpdate &&
 	     triggeredMag->publicID() == info->event->preferredMagnitudeID() ) {
 		// Call registered processors
-		EventProcessors::iterator it;
-		for ( it = _processors.begin(); it != _processors.end(); ++it ) {
-			if ( it->second->process(info->event.get()) )
+		for ( EventProcessorPtr &proc : _processors ) {
+			if ( proc->process(info->event.get(), info->journal) )
 				update = true;
 		}
 
@@ -3326,14 +3385,13 @@ void EventTool::choosePreferred(EventInformation *info, Origin *origin,
 		               Notifier::IsEnabled());
 
 		if ( !info->created )
-			updateEvent(info->event.get(), callProcessors);
+			updateEvent(info, callProcessors);
 		else {
 			info->created = false;
 
 			// Call registered processors
-			EventProcessors::iterator it;
-			for ( it = _processors.begin(); it != _processors.end(); ++it )
-				it->second->process(info->event.get());
+			for ( EventProcessorPtr &proc : _processors )
+				proc->process(info->event.get(), info->journal);
 		}
 	}
 }
@@ -3762,14 +3820,13 @@ void EventTool::choosePreferred(EventInformation *info, DataModel::FocalMechanis
 			choosePreferred(info, info->preferredOrigin.get(), nullptr);
 
 		if ( !info->created )
-			updateEvent(info->event.get());
+			updateEvent(info);
 		else {
 			info->created = false;
 
 			// Call registered processors
-			EventProcessors::iterator it;
-			for ( it = _processors.begin(); it != _processors.end(); ++it )
-				it->second->process(info->event.get());
+			for ( EventProcessorPtr &proc : _processors )
+				proc->process(info->event.get(), info->journal);
 		}
 	}
 }
@@ -3779,7 +3836,7 @@ void EventTool::choosePreferred(EventInformation *info, DataModel::FocalMechanis
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-void EventTool::updatePreferredOrigin(EventInformation *info) {
+void EventTool::updatePreferredOrigin(EventInformation *info, bool refresh) {
 	if ( !info->event ) return;
 
 	for ( size_t i = 0; i < info->event->originReferenceCount(); ++i ) {
@@ -3789,7 +3846,7 @@ void EventTool::updatePreferredOrigin(EventInformation *info) {
 			SEISCOMP_DEBUG("... loading magnitudes for origin %s", org->publicID().c_str());
 			query()->loadMagnitudes(org.get());
 		}
-		choosePreferred(info, org.get(), nullptr);
+		choosePreferred(info, org.get(), nullptr, false, refresh);
 	}
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -3974,7 +4031,8 @@ void EventTool::removedFromCache(Seiscomp::DataModel::PublicObject *po) {
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-void EventTool::updateEvent(DataModel::Event *ev, bool callProcessors) {
+void EventTool::updateEvent(EventInformation *info, bool callProcessors) {
+	DataModel::Event *ev = info->event.get();
 	Core::Time now = Core::Time::GMT();
 	// Set the modification to current time
 	try {
@@ -4003,9 +4061,8 @@ void EventTool::updateEvent(DataModel::Event *ev, bool callProcessors) {
 
 	if ( callProcessors ) {
 		// Call registered processors
-		EventProcessors::iterator it;
-		for ( it = _processors.begin(); it != _processors.end(); ++it )
-			it->second->process(ev);
+		for ( EventProcessorPtr &proc : _processors )
+			proc->process(ev, info->journal);
 	}
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<

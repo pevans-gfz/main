@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <seiscomp>
 	<module name="scevent" category="Processing">
-		<description>Associates an Origin to an Event or forms a new Event if no match is found. Selects the preferred magnitude.</description>
+		<description>
+		Associates an Origin to an Event or forms a new Event if no match is found.
+		Selects the preferred origin, magnitude and focal mechanism.</description>
 		<configuration>
 			<parameter name="eventIDPrefix" type="string">
 				<description>Prefix for all Event IDs</description>
@@ -180,6 +182,18 @@
 					<description>
 						Average between mb and Mw(mB) which must be exceeded to become Mw(mB)
 						preferred.
+					</description>
+				</parameter>
+
+				<parameter name="magPriorityOverStationCount" type="boolean" default="false">
+					<description>
+						If false then the station count rules out the magnitude priority
+						which is only taken into account if two magnitudes have the
+						same station count.
+
+						If true then the priority rules out the station count
+						which is only taken into account if two magnitudes have the
+						same priority.
 					</description>
 				</parameter>
 

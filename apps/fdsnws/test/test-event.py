@@ -36,10 +36,12 @@ class TestEvent(FDSNWSTest):
             ('', ctXML, False),
             ('?format=qml-rt', ctXML, False),
             ('?format=csv', ctTXT, False),
+            # Mw is found in derived origin of preferred focal mechanism which is not the preferred origin
+            ('?format=text&magnitudetype=Mw', ctTXT, False),
         ]
         for q, ct, concurrent in tests:
-            self.testGET('{}{}'.format(query, q), ct, [], concurrent,
-                         dataFile='{}{}.txt'.format(resFile, i), testID=i)
+            self.testHTTP('{}{}'.format(query, q), ct, [], concurrent,
+                          dataFile='{}{}.txt'.format(resFile, i), testID=i)
             i += 1
 
 

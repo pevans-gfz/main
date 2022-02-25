@@ -61,9 +61,10 @@ HCApp::HCApp(int& argc, char** argv, int flags, Type type )
 	setLoadRegionsEnabled(false);
 
 	_gain = 1.0;
+	_scaling = "minmax";
 	_amplitudesRange = 0.0;
-	_amplitudesMin =  -0.00001f;
-	_amplitudesMax =  +0.00001f;
+	_amplitudesMin =  -0.00001;
+	_amplitudesMax =  +0.00001;
 	_fixCurrentTimeToLastRecord = false;
 	_numberOfRows = 48;
 	_timeSpanPerRow = 1800;
@@ -75,8 +76,9 @@ HCApp::HCApp(int& argc, char** argv, int flags, Type type )
 	_dpi = 300;
 	_timeFormat = "%F";
 	_snapshotTimeout = -1;
-	_streamThread = NULL;
+	_streamThread = nullptr;
 	_snapshotTimer = -1;
+	_outputFilename = "/tmp/heli_%N_%S_%L_%C.png";
 }
 
 
@@ -120,7 +122,7 @@ QString HCApp::findHeadline(const DataModel::WaveformStreamID &streamID,
 }
 
 
-float HCApp::findGain(const DataModel::WaveformStreamID &streamID, const Core::Time &refTime) {
+double HCApp::findGain(const DataModel::WaveformStreamID &streamID, const Core::Time &refTime) {
 	if ( commandline().hasOption("gain") ) {
 		SEISCOMP_DEBUG("Using supplied gain = %f", _gain);
 		return _gain;
@@ -154,6 +156,9 @@ bool HCApp::initConfiguration() {
 	if ( !Gui::Application::initConfiguration() )
 		return false;
 
+	try { _scaling = configGetString("heli.amplitudeRange.scaling"); }
+	catch ( Config::Exception& e ) {}
+
 	try { _amplitudesMin = configGetDouble("heli.amplitudeRange.min"); }
 	catch ( Config::Exception& e ) {}
 
@@ -181,7 +186,9 @@ bool HCApp::initConfiguration() {
 		for ( size_t i = 0; i < colors.size(); ++i ) {
 			QColor c;
 			if ( !Gui::fromString(c, colors[i]) ) {
-				std::cerr << "WARNING: '" << colors[i] << "': invalid color definition in 'colors': using defaults" << std::endl;
+				std::cerr << "WARNING: '" << colors[i]
+				          << "': invalid color definition in 'colors': using defaults"
+				          << std::endl;
 				_rowColors.clear();
 				break;
 			}
@@ -194,6 +201,7 @@ bool HCApp::initConfiguration() {
 	try { _timeSpanPerRow = configGetInt("heli.rowTimeSpan"); } catch ( ... ) {}
 	try { _antialiasing = configGetBool("heli.antialiasing"); } catch ( ... ) {}
 	try { _lineWidth = configGetInt("heli.lineWidth"); } catch ( ... ) {}
+	try { _outputFilename = configGetString("heli.dump.outputFile"); } catch ( ... ) {}
 	try { _xRes = configGetInt("heli.dump.xres"); } catch ( ... ) {}
 	try { _yRes = configGetInt("heli.dump.yres"); } catch ( ... ) {}
 	try { _dpi = configGetInt("heli.dump.dpi"); } catch ( ... ) {}
@@ -212,45 +220,73 @@ void HCApp::createCommandLineDescription() {
 	Gui::Application::createCommandLineDescription();
 
 	commandline().addGroup("Mode");
-	commandline().addOption("Mode", "end-time", "Set the end time of acquisition, default: 'gmt', format \"%F %T\"", (std::string*)NULL);
-	commandline().addOption("Mode", "offline", "Do not connect to a messaging server and do not use the database");
-	commandline().addOption("Mode", "no-messaging", "Do not connect to a messaging server but use the database");
+	commandline().addOption("Mode", "end-time", "Set the end time of acquisition, "
+	                        "default: 'gmt', format \"%F %T\"",
+	                        (std::string*)nullptr);
+	commandline().addOption("Mode", "offline", "Do not connect to a messaging "
+	                        "server and do not use the database");
+	commandline().addOption("Mode", "no-messaging", "Do not connect to a "
+	                        "messaging server but use the database");
 
 	commandline().addGroup("Data");
-	commandline().addOption("Data", "stream", "The record stream that should be displayed: stream=net.sta.loc.cha", &_streamID);
+	commandline().addOption("Data", "stream", "The record stream that should be "
+	                        "displayed. Use option multiple times for multiple "
+	                        "streams. Format: net.sta.loc.cha", &_streamIDs);
 	commandline().addOption("Data", "filter", "The filter to apply", &_filterString);
 	commandline().addOption("Data", "gain", "Gain applied to the data before plotting.", &_gain);
-	commandline().addOption("Data", "amp-range-min", "Lower bound of amplitude range per row", &_amplitudesMin);
-	commandline().addOption("Data", "amp-range-max", "Upper bound of amplitude range per row", &_amplitudesMax);
-	commandline().addOption("Data", "amp-range", "Arround zero bound of amplitude range per row", &_amplitudesRange);
-	commandline().addOption("Data", "record-time", "Does the last row always contain the last record received", &_fixCurrentTimeToLastRecord);
+	commandline().addOption("Data", "amp-scaling", "Method for scaling amplitudes per row. "
+	                        "Possible values:"
+	                        "\nminmax: Scale all rows to configured minimum and "
+	                        "maximum amplitudes."
+	                        "\nrow: Scale each row to the maximum within this row.",&_scaling);
+	commandline().addOption("Data", "amp-range-min", "Lower bound of amplitude "
+	                        "range per row. Requires --amp-scaling minmax",
+	                        &_amplitudesMin);
+	commandline().addOption("Data", "amp-range-max", "Upper bound of amplitude "
+	                        "range per row. Requires --amp-scaling minmax",
+	                        &_amplitudesMax);
+	commandline().addOption("Data", "amp-range", "Arround zero bound of amplitude "
+	                        "range per row. Requires --amp-scaling minmax. "
+	                        "Overrides min and max values.", &_amplitudesRange);
+	commandline().addOption("Data", "record-time", "Let the last row always "
+	                        "contain the last record received",
+	                        &_fixCurrentTimeToLastRecord);
 
 	commandline().addGroup("Output");
-	commandline().addOption("Output", "desc", "Enables/disables the display of a station description", &_stationDescription);
+	commandline().addOption("Output", "desc", "Enables/disables the display of a "
+	                        "station description", &_stationDescription);
 	commandline().addOption("Output", "rows", "Configures the number of rows to display", &_numberOfRows);
-	commandline().addOption("Output", "time-span", "Configures the time-span (in secs) per row", &_timeSpanPerRow);
-	commandline().addOption("Output", "aa", "Sets antialiasing for rendering the traces", &_antialiasing);
+	commandline().addOption("Output", "time-span", "Configures the time-span "
+	                        "(in secs) per row", &_timeSpanPerRow);
+	commandline().addOption("Output", "aa", "Sets antialiasing for rendering the "
+	                        "traces", &_antialiasing);
 	commandline().addOption("Output", "xres", "Output x resolution when generating images", &_xRes);
 	commandline().addOption("Output", "yres", "Output y resolution when generating images", &_yRes);
 	commandline().addOption("Output", "dpi", "Output dpi when generating postscript", &_dpi);
-	commandline().addOption("Output", "output,o", "Output filename (placeholders: %N,%S,%L,%C)", &_outputFilename);
-	commandline().addOption("Output", "interval", "Snapshot interval (<= 0 disabled timed snapshots)", &_snapshotTimeout);
+	commandline().addOption("Output", "output,o", "Output filename (placeholders: "
+	                        "%N,%S,%L,%C for network, station, sensorLocation, channel)",
+	                        &_outputFilename);
+	commandline().addOption("Output", "interval", "Snapshot interval (<= 0 disables "
+	                        "timed snapshots)", &_snapshotTimeout);
 }
 
 
 bool HCApp::validateParameters() {
 	if ( !Gui::Application::validateParameters() ) return false;
 
-	if ( !_streamID.empty() ) {
-		std::vector<std::string> tokens;
+	if ( !_streamIDs.empty() ) {
+		for ( const auto &stream : _streamIDs ) {
+			std::vector<std::string> tokens;
+			Core::split(tokens, stream.c_str(), ".", false);
+			if ( tokens.size() != 4 ) {
+				std::cerr << "ERROR: Malformed stream code found in '" << stream
+				          << "' format is: NET.STA.LOC.CHA"
+				          << std::endl;
+				return false;
+			}
 
-		Core::split(tokens, _streamID.c_str(), ".", false);
-		if ( tokens.size() != 4 ) {
-			std::cerr << "ERROR: Malformed streamcode found: format is: net.station.loc.channelcomponent" << std::endl;
-			return false;
+			_streamCodes.push_back(stream);
 		}
-
-		_streamCodes.push_back(_streamID);
 	}
 
 	if ( (type() == Tty) && _outputFilename.empty() ) {
@@ -262,7 +298,8 @@ bool HCApp::validateParameters() {
 		std::string dt = SCApp->commandline().option<std::string>("end-time");
 		_endTime = Seiscomp::Core::Time::FromString(dt.c_str(), "%F %T");
 		if ( !_endTime.valid() ) {
-			std::cerr << "ERROR: passed endtime is not valid, expect format \"YYYY-mm-dd HH:MM:SS\"" << std::endl
+			std::cerr << "ERROR: passed endtime is not valid, expect format "
+			             "\"YYYY-mm-dd HH:MM:SS\"" << std::endl
 			          << "       example: --end-time \"2010-01-01 12:00:00\"" << std::endl;
 			return false;
 		}
@@ -271,11 +308,13 @@ bool HCApp::validateParameters() {
 	}
 	catch ( ... ) {}
 
-	if ( commandline().hasOption("amp-range") && !commandline().hasOption("amp-range-min") )
+	if ( commandline().hasOption("amp-range") && !commandline().hasOption("amp-range-min") ) {
 		_amplitudesMin = -1 * fabs(_amplitudesRange);
+	}
 
-	if ( commandline().hasOption("amp-range") && !commandline().hasOption("amp-range-max") )
+	if ( commandline().hasOption("amp-range") && !commandline().hasOption("amp-range-max") ) {
 		_amplitudesMax = fabs(_amplitudesRange);
+	}
 
 	if ( commandline().hasOption("no-messaging") )
 		setMessagingEnabled(false);
@@ -304,6 +343,38 @@ bool HCApp::init() {
 		return false;
 	}
 
+	SEISCOMP_INFO("Parameter overview:");
+	for ( size_t i = 0; i < _streamCodes.size(); ++i ) {
+		SEISCOMP_INFO(" + added stream: %s", _streamCodes[i].c_str());
+		if ( i > 0 ) {
+			SEISCOMP_WARNING("Configured stream %s is only considered when running in capture mode.",
+			                 _streamCodes[i].c_str());
+		}
+	}
+	SEISCOMP_INFO(" + filter: %s", _filterString.c_str());
+	SEISCOMP_INFO(" + rows: %i", _numberOfRows);
+	SEISCOMP_INFO(" + rows time span: %i s", _timeSpanPerRow);
+
+	if ( _scaling == "row" ) {
+		SEISCOMP_INFO(" + amplitudes are scaled to row maximum");
+	}
+	else {
+		SEISCOMP_INFO(" + minimum amplitude: %.9f", _amplitudesMin);
+		SEISCOMP_INFO(" + maximum amplitude: %.9f", _amplitudesMax);
+	}
+
+	if ( _snapshotTimeout <= 0 ) {
+		SEISCOMP_INFO(" + Image capturing is inactive");
+	}
+	else {
+		SEISCOMP_INFO(" + Image capturing:");
+		SEISCOMP_INFO("   + output file %s", _outputFilename.c_str());
+		SEISCOMP_INFO("   + interval %i s", _snapshotTimeout);
+		SEISCOMP_INFO("   + dpi %i", _dpi);
+		SEISCOMP_INFO("   + xres %i", _xRes);
+		SEISCOMP_INFO("   + yres %i", _yRes);
+	}
+
 	return true;
 }
 
@@ -318,6 +389,7 @@ bool HCApp::run() {
 
 			heli->setAntialiasingEnabled(_antialiasing);
 			heli->setLineWidth(_lineWidth);
+			heli->setScaling(_scaling);
 			heli->setAmplitudeRange(_amplitudesMin, _amplitudesMax);
 			heli->setLayout(_numberOfRows, _timeSpanPerRow);
 
@@ -363,17 +435,20 @@ bool HCApp::run() {
 					        this, SLOT(acquisitionFinished()));
 				}
 
-				_streamThread->addStream(streamID.networkCode(), streamID.stationCode(), streamID.locationCode(), streamID.channelCode(),
+				_streamThread->addStream(streamID.networkCode(), streamID.stationCode(),
+				                         streamID.locationCode(), streamID.channelCode(),
 				                         endTime - heli->recordsTimeSpan() - Core::TimeSpan(_timeSpanPerRow), Core::Time());
 			}
 			else {
 				IO::RecordStreamPtr rs = IO::RecordStream::Open(recordStreamURL().c_str());
-				if ( rs == NULL ) {
-					std::cerr << "ERROR: Unable to open recordstream " << recordStreamURL() << std::endl;
+				if ( !rs ) {
+					std::cerr << "ERROR: Unable to open recordstream "
+					          << recordStreamURL() << std::endl;
 					return false;
 				}
 
-				rs->addStream(streamID.networkCode(), streamID.stationCode(), streamID.locationCode(), streamID.channelCode(),
+				rs->addStream(streamID.networkCode(), streamID.stationCode(),
+				              streamID.locationCode(), streamID.channelCode(),
 				              endTime - heli->recordsTimeSpan() - Core::TimeSpan(_timeSpanPerRow), endTime);
 
 				try {
@@ -418,6 +493,7 @@ bool HCApp::run() {
 
 
 void HCApp::setupUi(MainWindow *w) {
+	w->setScaling(_scaling);
 	w->setAmplitudeRange(_amplitudesMin, _amplitudesMax);
 	w->fixCurrentTimeToLastRecord(_fixCurrentTimeToLastRecord);
 	w->setStationDescriptionEnabled(_stationDescription);
@@ -444,7 +520,12 @@ void HCApp::setupUi(MainWindow *w) {
 	if ( !_filterString.empty() )
 		w->setFilter(_filterString);
 
-	w->start(_outputFilename.c_str());
+	QString file = _outputFilename.c_str();
+	file.replace("%N", streamID.networkCode().c_str());
+	file.replace("%S", streamID.stationCode().c_str());
+	file.replace("%L", streamID.locationCode().c_str());
+	file.replace("%C", streamID.channelCode().c_str());
+	w->start(file);
 }
 
 
@@ -538,7 +619,7 @@ void HCApp::receivedRecord(Seiscomp::Record *rec) {
 void HCApp::acquisitionFinished() {
 	if ( _streamThread ) {
 		delete _streamThread;
-		_streamThread = NULL;
+		_streamThread = nullptr;
 		QApplication::quit();
 	}
 }

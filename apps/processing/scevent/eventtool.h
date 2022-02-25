@@ -97,13 +97,14 @@ class EventTool : public Application {
 		//! Chooses the preferred origin and magnitude for an event
 		void choosePreferred(EventInformation *info, DataModel::Origin *origin,
 		                     DataModel::Magnitude *mag,
-		                     bool realOriginUpdate = false);
+		                     bool realOriginUpdate = false,
+		                     bool refresh = false);
 
 		//! Chooses the preferred focal mechanism an event
 		void choosePreferred(EventInformation *info, DataModel::FocalMechanism *fm);
 
 		//! Select the preferred origin again among all associated origins
-		void updatePreferredOrigin(EventInformation *info);
+		void updatePreferredOrigin(EventInformation *info, bool refresh = false);
 		void updatePreferredFocalMechanism(EventInformation *info);
 
 		//! Merges two events. Returns false if nothing has been done due to
@@ -126,7 +127,7 @@ class EventTool : public Application {
 
 		void removedFromCache(DataModel::PublicObject *);
 
-		void updateEvent(DataModel::Event *ev, bool = true);
+		void updateEvent(EventInformation *info, bool = true);
 		void updateRegionName(DataModel::Event *ev, DataModel::Origin *org);
 		void cleanUpEventCache();
 
@@ -217,7 +218,7 @@ class EventTool : public Application {
 		typedef std::list<DelayedEventUpdate> DelayEventBuffer;
 		typedef std::set<std::string> IDSet;
 
-		typedef std::map<std::string, EventProcessorPtr> EventProcessors;
+		typedef std::list<EventProcessorPtr> EventProcessors;
 
 		double                        _fExpiry;
 		Cache                         _cache;

@@ -43,7 +43,7 @@ from . import utils
 
 DBMaxUInt = 18446744073709551615  # 2^64 - 1
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 
 ################################################################################
 
@@ -739,6 +739,7 @@ class FDSNEvent(BaseResource):
 
         orderByMag = ro.orderBy and ro.orderBy.startswith('magnitude')
         reqMag = ro.mag or orderByMag
+        reqMagType = ro.mag and ro.mag.type
         reqDist = ro.geo and ro.geo.bCircle
         colPID = _T('publicID')
         colTime = _T('time_value')
@@ -757,7 +758,8 @@ class FDSNEvent(BaseResource):
                 bBox = ro.geo.bCircle.calculateBBox()
 
         # SELECT --------------------------------
-        q = "SELECT DISTINCT pe.%s, e.*, %s" % (colPID, colOrderBy)
+        q = "SELECT DISTINCT pe.%s AS %s, e.*, %s AS colOrderBy" % (
+            colPID, colPID, colOrderBy)
         if reqDist:  # Great circle distance calculated by Haversine formula
             c = ro.geo.bCircle
             q += ", DEGREES(ACOS(" \
@@ -770,7 +772,11 @@ class FDSNEvent(BaseResource):
         q += " FROM Event AS e, PublicObject AS pe" \
              ", Origin AS o, PublicObject AS po"
         if reqMag:
-            q += ", Magnitude AS m, PublicObject AS pm"
+            q += ", Magnitude AS m"
+            if not reqMagType:
+                # the preferred magnitude is used if not specific magnitude type
+                # is requested
+                q += ", PublicObject AS pm"
 
         # WHERE ---------------------------------
         q += " WHERE e._oid = pe._oid"
@@ -891,26 +897,47 @@ class FDSNEvent(BaseResource):
 
         # magnitude information filter
         if reqMag:
-            q += " AND m._oid = pm._oid AND "
-            if ro.mag and ro.mag.type:
-                # join magnitude table on oID of origin and magnitude type
-                q += "m._parent_oid = o._oid AND m.%s = '%s'" % (_T('type'),
-                                                                 dbq.toString(ro.mag.type))
-            else:
-                # join magnitude table on preferred magnitude id of event
-                q += "pm.%s = e.%s" % (colPID, _T('preferredMagnitudeID'))
-
             if ro.mag and ro.mag.min is not None:
                 q += " AND m.%s >= %s" % (colMag, ro.mag.min)
             if ro.mag and ro.mag.max is not None:
                 q += " AND m.%s <= %s" % (colMag, ro.mag.max)
 
+            # default case, no magnitude type filter:
+            # join magnitude table on preferred magnitude id of event
+            if not reqMagType:
+                q += " AND m._oid = pm._oid AND pm.%s = e.%s" % (
+                    colPID, _T('preferredMagnitudeID'))
+
+            # magnitude type filter:
+            # Specific mag type is searched in magnitudes of preferred origin or
+            # in derived origin of moment tensors of preferred focal mechanism.
+            else:
+                q += " AND m.%s = '%s' AND m._parent_oid " % (
+                    _T('type'), dbq.toString(ro.mag.type))
+
+                # For performance reasons the query is split in two parts
+                # combined with a UNION statement. The subsequent ORDER BY,
+                # LIMIT/OFFSET or distance subquery is carried out on the entire
+                # UNION result set.
+                q += "= po._oid UNION " + q + "IN (" \
+                         "SELECT pdo._oid " \
+                         "FROM " \
+                             "PublicObject pfm, " \
+                             "MomentTensor mt, " \
+                             "PublicObject pdo " \
+                         "WHERE " \
+                             "pfm.%s = e.%s AND " \
+                             "mt._parent_oid = pfm._oid AND " \
+                             "pdo.%s = mt.%s)" % (
+                                 colPID, _T('preferredFocalMechanismID'),
+                                 colPID, _T('derivedOriginID'))
+
         # ORDER BY ------------------------------
-        q += " ORDER BY %s" % colOrderBy
+        q += " ORDER BY colOrderBy "
         if ro.orderBy and ro.orderBy.endswith('-asc'):
-            q += " ASC"
+            q += "ASC"
         else:
-            q += " DESC"
+            q += "DESC"
 
         # SUBQUERY distance (optional) ----------
         if reqDist:

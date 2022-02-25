@@ -16,6 +16,7 @@
 #include <seiscomp/math/filter/butterworth.h>
 #include <seiscomp/gui/core/application.h>
 #include <seiscomp/gui/core/utils.h>
+#include <seiscomp/logging/log.h>
 
 #include <QPrinter>
 
@@ -44,12 +45,12 @@ bool minmax(const RecordSequence *seq, const Core::TimeWindow &tw,
 				if ( tw.overlaps(rtw) ) {
 					double fs = rec->samplingFrequency();
 					double dt = tw.startTime() - rec->startTime();
-					if(dt>0)
+					if( dt > 0 )
 						imin = int(dt*fs);
 
 					dt = rec->endTime() - tw.endTime();
 					imax = ns;
-					if(dt>0)
+					if( dt > 0 )
 						imax -= int(dt*fs);
 				}
 				else
@@ -74,13 +75,13 @@ bool minmax(const RecordSequence *seq, const Core::TimeWindow &tw,
 		for ( int i = imin; i < imax; ++i )
 			ofs += (*arr)[i];
 
-		if(min==max) {
+		if( min == max ) {
 			min = xmin;
 			max = xmax;
 		}
 		else {
-			if (xmin<min) min = xmin;
-			if (xmax>max) max = xmax;
+			if ( xmin < min ) min = xmin;
+			if ( xmax > max ) max = xmax;
 		}
 	}
 
@@ -99,14 +100,15 @@ void HeliCanvas::Row::update() {
 
 HeliCanvas::HeliCanvas(bool saveUnfiltered)
 : _saveUnfiltered(saveUnfiltered) {
-	_records = NULL;
-	_filteredRecords = NULL;
+	_records = nullptr;
+	_filteredRecords = nullptr;
 	_scale = 1.0f;
-	_filter = NULL;
+	_filter = nullptr;
 
 	_gaps[0] = SCScheme.colors.records.gaps;
 	_gaps[1] = SCScheme.colors.records.gaps;
 
+	_scaling = "minmax";
 	_amplitudeRange[0] = -0.00001;
 	_amplitudeRange[1] = +0.00001;
 
@@ -150,9 +152,9 @@ void HeliCanvas::setAntialiasingEnabled(bool e) {
 
 bool HeliCanvas::setFilter(const std::string &filterStr) {
 	Filter *filter = Filter::Create(filterStr);
-	if ( filter == NULL ) return false;
+	if ( !filter ) return false;
 
-	if ( _filter == NULL && filter == NULL ) {
+	if ( !_filter and !filter) {
 		return false;
 	}
 
@@ -162,6 +164,12 @@ bool HeliCanvas::setFilter(const std::string &filterStr) {
 	_filter = filter;
 	applyFilter();
 
+	return true;
+}
+
+
+bool HeliCanvas::setScaling(const std::string &scaling) {
+	_scaling = scaling;
 	return true;
 }
 
@@ -189,7 +197,7 @@ void HeliCanvas::setLineWidth(int lw) {
 
 
 void HeliCanvas::applyFilter() {
-	if ( _filteredRecords == NULL ) return;
+	if ( !_filteredRecords ) return;
 
 	_filteredRecords->clear();
 	for ( RecordSequence::iterator it = _records->begin(); it != _records->end(); ++it ) {
@@ -218,8 +226,12 @@ void HeliCanvas::applyFilter() {
 bool HeliCanvas::feed(Record *rec) {
 	RecordPtr tmp(rec);
 
-	if ( rec->data() == NULL ) return false;
-	if ( _records == NULL ) return false;
+	if ( !rec->data() ) {
+		return false;
+	}
+	if ( !_records ) {
+		return false;
+	}
 
 	FloatArrayPtr arr = (FloatArray*)rec->data()->copy(Array::FLOAT);
 	GenericRecordPtr crec = new GenericRecord(*rec);
@@ -368,12 +380,13 @@ int HeliCanvas::draw(QPainter &p, const QSize &size) {
 
 void HeliCanvas::save(QString streamID, QString headline, QString date,
                       QString filename, int xres, int yres, int dpi) {
+	SEISCOMP_DEBUG("Printing image file: '%s'", qPrintable(filename));
 	std::cerr << "Printing [" << qPrintable(filename) << "] ... " << std::flush;
 
 	QPainter *painter;
 	QFileInfo fi(filename);
-	QPrinter *printer = NULL;
-	QImage *pixmap = NULL;
+	QPrinter *printer = nullptr;
+	QImage *pixmap = nullptr;
 
 	if ( fi.suffix().toLower() == "ps" ) {
 		printer = new QPrinter(QPrinter::HighResolution);
@@ -488,22 +501,31 @@ void HeliCanvas::render(QPainter &p) {
 					_rows[i].polyline = new Gui::RecordPolyline;
 			}
 
-			float ofs, min, max;
+			float ofs, min, max, minAmp, maxAmp;
 			Core::TimeWindow tw(_rows[i].time, _rows[i].time + Core::TimeSpan(_rowTimeSpan));
 			minmax(_filteredRecords, tw, ofs, min, max);
+
+			if ( _scaling == "row" ) {
+				minAmp = min - ofs;
+				maxAmp = max - ofs;
+			}
+			else {
+				minAmp = _amplitudeRange[0];
+				maxAmp = _amplitudeRange[1];
+			}
 
 			if ( _antialiasing )
 				static_cast<Gui::RecordPolylineF*>(_rows[i].polyline.get())
 				->create(_filteredRecords,
 				         tw.startTime(), tw.endTime(),
 				         (double)recordWidth / (double)_rowTimeSpan,
-				         _amplitudeRange[0], _amplitudeRange[1], ofs, rowHeight);
+				         minAmp, maxAmp, ofs, rowHeight);
 			else
 				static_cast<Gui::RecordPolyline*>(_rows[i].polyline.get())
 				->create(_filteredRecords,
 				         tw.startTime(), tw.endTime(),
 				         (double)recordWidth / (double)_rowTimeSpan,
-				         _amplitudeRange[0], _amplitudeRange[1], ofs, rowHeight);
+				         minAmp, maxAmp, ofs, rowHeight);
 			_rows[i].dirty = false;
 		}
 
@@ -584,7 +606,7 @@ void HeliCanvas::render(QPainter &p) {
 
 	// Render timescale
 	double pos = 0;
-	double scale = (double)recordWidth / (double)_rowTimeSpan;
+	double scale = double(recordWidth) / double(_rowTimeSpan);
 	double dx[2] = {_drx[0], _drx[1]};
 	
 	// Adapted from gui/libs/ruler
@@ -601,7 +623,7 @@ void HeliCanvas::render(QPainter &p) {
 
 		int tick = k==0 ? tickLong : tickShort;
 
-		int x = (int)((cpos-pos)*scale);
+		int x = int(((cpos-pos)*scale));
 		while ( x < recordWidth ) {
 			p.drawLine(_labelMargin+x, startY, _labelMargin+x, startY+tick);
 
@@ -662,7 +684,7 @@ void HeliCanvas::resize(const QFontMetrics &fm, const QSize &size) {
 
 	unsigned int imax = sizeof(spacings)/sizeof(Spacing);
 
-	double scale = (double)_size.width() / (double)_rowTimeSpan;
+	double scale = double(_size.width()) / double(_rowTimeSpan);
 
 	_drx[0] = spacings[imax-1].major;
 	_drx[1] = spacings[imax-1].minor;

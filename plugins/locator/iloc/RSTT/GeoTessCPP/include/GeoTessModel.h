@@ -178,25 +178,11 @@ protected:
 
 	/**
 	 * Load a model (3D grid and data) from an ascii File.
-	 * <p>
-	 * The format of the file is: <br>
-	 * int fileFormatVersion (currently only recognizes 1). <br>
-	 * String gridFile: either *, or relative path to gridFile. <br>
-	 * int nVertices, nLayers, nAttributes, dataType(DOUBLE or FLOAT). <br>
-	 * int[] tessellations = new int[nLayers]; <br>
-	 * Profile[nVertices][nLayers]: data
 	 */
 	void loadModelAscii(const string& inputFile, const string& relGridFilePath);
 
 	/**
 	 * Load a model (3D grid and data) from an ascii File.
-	 * <p>
-	 * The format of the file is: <br>
-	 * int fileFormatVersion (currently only recognizes 1). <br>
-	 * String gridFile: either *, or relative path to gridFile. <br>
-	 * int nVertices, nLayers, nAttributes, dataType(DOUBLE or FLOAT). <br>
-	 * int[] tessellations = new int[nLayers]; <br>
-	 * Profile[nVertices][nLayers]: data
 	 *
 	 * @param input ascii stream that provides input
 	 * @param inputDirectory the directory where the model file resides
@@ -209,13 +195,7 @@ protected:
 
 	/**
 	 * Load a model (3D grid and data) from a binary File.
-	 * <p>
-	 * The format of the file is: <br>
-	 * int fileFormatVersion (currently only recognizes 1). <br>
-	 * String gridFile: either *, or relative path to gridFile. <br>
-	 * int nVertices, nLayers, nAttributes, dataType(DOUBLE or FLOAT). <br>
-	 * int[] tessellations = new int[nLayers]; <br>
-	 * Profile[nVertices][nLayers]: data
+
 	 * @param inputFile the full path name of the file that contains the binary model.
 	 * @param relGridFilePath the relative path from the directory that contains the
 	 * model to the directory that contains the grid file.
@@ -224,13 +204,6 @@ protected:
 
 	/**
 	 * Load a model (3D grid and data) from a binary File.
-	 * <p>
-	 * The format of the file is: <br>
-	 * int fileFormatVersion (currently only recognizes 1). <br>
-	 * String gridFile: either *, or relative path to gridFile. <br>
-	 * int nVertices, nLayers, nAttributes, dataType(DOUBLE or FLOAT). <br>
-	 * int[] tessellations = new int[nLayers]; <br>
-	 * Profile[nVertices][nLayers]: data
 	 * @param input binary stream that provides input
 	 * @param inputDirectory the directory where the model file resides
 	 * @param relGridFilePath the relative path from the directory where
@@ -538,7 +511,7 @@ public:
 	 * Returns the class name.
 	 * @return class name
 	 */
-	static  string class_name() { return "GeoTessModel"; }
+	virtual  string class_name() { return "GeoTessModel"; }
 
 	/**
 	 * Read model data and grid from a file.
@@ -560,6 +533,15 @@ public:
 	 * @return true if inputFile is a GeoTessModel file.
 	 */
 	static bool isGeoTessModel(const string& fileName);
+
+	/**
+	 * Determine the class name of a model stored in a file, i.e.,
+	 * whether it is a GeoTessModel, GeoTessModelSLBM, LibCorr3DModel, etc.
+	 *
+	 * @param fileName
+	 * @return the name of the class of the model in the file.
+	 */
+	static string getClassName(const string& fileName, const string& relGridFilePath = ".");
 
 	/**
 	 * Return the amount of memory currently occupied by this GeoTessModel object
@@ -1325,15 +1307,6 @@ public:
 	{ setProfile(vertex, 0, new GeoTessProfileSurfaceEmpty()); }
 
 	/**
-	 * Write the model to file. Grid information will be included in the
-	 * specified output file.
-	 *
-	 * @param outputFile name of the file to receive the model
-	 * @throws IOException
-	 */
-	void	writeModel(const string& outputFile) { writeModel(outputFile, "*"); }
-
-	/**
 	 * Write the model to file. The data (radii and attribute values) are
 	 * written to outputFile. If gridFileName is '*' or omitted then the grid information
 	 * is written to the same file as the data. If gridFileName is something
@@ -1347,7 +1320,7 @@ public:
 	 * @param gridFileName
 	 *            name of file to receive the grid (no path info), or "*"
 	 */
-	void writeModel(const string& outputFile, const string& gridFileName);
+	void writeModel(const string& outputFile, const string& gridFileName = "*");
 
 	/**
 	 * To string method.
@@ -1852,11 +1825,6 @@ public:
 //			const GeoTessInterpolatorType& horizontalType, map<int, double>& weights)
 //	{ return getPathIntegral2D(attribute, reciprocal, firstPoint, lastPoint, pointSpacing, earthRadius, horizontalType, &weights); }
 
-
-	/**
-	 * Returns true if the input format version is supported.
-	 */
-	bool isSupportedFormatVersion(int frmtVrsn) { return (frmtVrsn == 1) ? true : false; }
 
 	/**
 	 * Test the array of profiles at each vertex to ensure that the top of one layer and the bottom

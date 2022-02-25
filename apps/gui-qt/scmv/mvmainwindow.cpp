@@ -324,10 +324,6 @@ class StationRenderParameter {
 			return StationGlyphs::DEFAULT;
 		}
 
-		virtual bool hasAnnotation() const {
-			return false;
-		}
-
 	protected:
 		StationData* stationData() const {
 			return _stationData;
@@ -358,10 +354,6 @@ class DisabledStationRenderParameter : public StationRenderParameter {
 
 		virtual char annotation() const {
 			return StationGlyphs::DISABLED;
-		}
-
-		virtual bool hasAnnotation() const {
-			return true;
 		}
 };
 
@@ -469,13 +461,6 @@ class QCStationRenderParameter : public StationRenderParameter {
 
 			return StationGlyphs::DEFAULT;
 		}
-
-		virtual bool hasAnnotation() const {
-			if ( stationData()->qcGlobalStatus > QCStatus::OK )
-				return true;
-			return false;
-		}
-
 };
 
 
@@ -543,18 +528,7 @@ bool MvMainWindow::init() {
 	}
 
 	_qcHandler.init(SCApp->configuration());
-
-	SCScheme.map.showLegends = true;
-
-	// Overwrite default menu settings
-	try {
-		bool showLegends = SCApp->configGetBool("legend");
-		_ui.showMapLegendAction->setChecked(showLegends);
-		SCScheme.map.showLegends = showLegends;
-	}
-	catch ( ... ) {
-		_ui.showMapLegendAction->setChecked(SCScheme.map.showLegends);
-	}
+	_ui.showMapLegendAction->setChecked(SCScheme.map.showLegends);
 
 	try {
 		_ui.showStationIdAction->setChecked(SCApp->configGetBool("annotations"));
@@ -604,11 +578,17 @@ bool MvMainWindow::init() {
 	} catch ( Config::Exception& ) {}
 
 	StationDataCollection::iterator stationIt = _stationDataCollection.begin();
-	for ( ; stationIt != _stationDataCollection.end(); ++stationIt )
+	for ( ; stationIt != _stationDataCollection.end(); ++stationIt ) {
 		stationIt->gmFilter = StationData::GmFilterPtr(Math::Filtering::InPlaceFilter<double>::Create(_configStationRecordFilterStr));
+		if ( !stationIt->gmFilter ) {
+			SEISCOMP_ERROR("Could not create filter: %s",
+			               _configStationRecordFilterStr.c_str());
+			return false;
+		}
+	}
 
 	if ( !initRecordStream() ) {
-		SEISCOMP_ERROR("Could not initialize record stream");
+		SEISCOMP_WARNING("Could not initialize record stream");
 	}
 
 	try {
@@ -647,6 +627,10 @@ bool MvMainWindow::init() {
 	try {
 		_configEventActivityLifeSpan = SCApp->configGetDouble("eventActivityLifeSpan");
 	} catch ( Config::Exception& ) {}
+
+	MvStationSymbol::setCharacterDrawingColor(SCScheme.colors.stations.text);
+	MvStationSymbol::setDrawFullID(_ui.actionShowStationChannelCodes->isChecked());
+	_annotationLayer->setVisible(_ui.showStationIdAction->isChecked());
 
 	return true;
 }
@@ -736,6 +720,9 @@ void MvMainWindow::setupStandardUi() {
 	_mapWidget = new MvMapWidget(SCApp->mapsDesc());
 	_mapWidget->installEventFilter(this);
 
+	_annotationLayer = new Gui::Map::AnnotationLayer(_mapWidget, new Gui::Map::Annotations);
+	_mapWidget->canvas().addLayer(_annotationLayer);
+
 	double lonmin = -180, lonmax = 180, latmin = -90, latmax = 90;
 	try { lonmin = SCApp->configGetDouble("display.lonmin"); } catch (Config::Exception &) {}
 	try { lonmax = SCApp->configGetDouble("display.lonmax"); } catch (Config::Exception &) {}
@@ -822,7 +809,6 @@ void MvMainWindow::modifyUiSetupForDisplayMode() {
 	// Overwrite default menu settings
 	bool showLegend = SCScheme.map.showLegends;
 
-	try { showLegend = SCApp->configGetBool("legend"); } catch ( ... ) {}
 	if ( SCApp->commandline().hasOption("with-legend") ) showLegend = true;
 
 	_ui.showMapLegendAction->setChecked(showLegend);
@@ -1056,13 +1042,7 @@ void MvMainWindow::updateMap() {
 		it->stationSymbolRef->setFrameColor(renderTraits->frameColor());
 		it->stationSymbolRef->setFrameSize(renderTraits->frameSize());
 		it->stationSymbolRef->setPriority(renderTraits->priority());
-
-		it->stationSymbolRef->setCharacterDrawingEnabled(false);
-		if ( renderTraits->hasAnnotation() ) {
-			it->stationSymbolRef->setCharacterDrawingEnabled(true);
-			it->stationSymbolRef->setCharacterDrawingColor(SCScheme.colors.stations.text);
-			it->stationSymbolRef->setCharacter(renderTraits->annotation());
-		}
+		it->stationSymbolRef->setCharacter(renderTraits->annotation());
 	}
 
 	// FIX: Is this the only way to update the mapWidget? A simple
@@ -1197,14 +1177,12 @@ bool MvMainWindow::readStationsFromDataBase() {
 			if ( it == stations.end() ) continue;
 
 			it->second.stationRef = station;
-			it->second.stationSymbolRef = new MvStationSymbol(lat, lon);
+			it->second.stationSymbolRef = new MvStationSymbol(lat, lon, _annotationLayer->annotations()->add("TEST"));
 			it->second.stationSymbolRef->setType(StationSymbolType);
 			it->second.stationSymbolRef->setID(it->second.id);
 			it->second.stationSymbolRef->setNetworkCode(station->network()->code());
 			it->second.stationSymbolRef->setStationCode(station->code());
-			it->second.stationSymbolRef->setIdDrawingColor(SCScheme.colors.map.stationAnnotations);
-			it->second.stationSymbolRef->setIdDrawingEnabled(_ui.showStationIdAction->isChecked());
-			it->second.stationSymbolRef->setDrawFullID(_ui.actionShowStationChannelCodes->isChecked());
+			it->second.stationSymbolRef->updateAnnotation();
 
 			_stationDataCollection.add(it->second);
 			_mapWidget->canvas().symbolCollection()->add(it->second.stationSymbolRef);
@@ -2380,11 +2358,7 @@ void MvMainWindow::deselectEvents() {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void MvMainWindow::setStationIdVisible(bool val) {
-	for ( StationDataCollection::iterator it = _stationDataCollection.begin();
-			it	!= _stationDataCollection.end(); it++ ) {
-		it->stationSymbolRef->setIdDrawingEnabled(val);
-	}
-
+	_annotationLayer->setVisible(val);
 	_mapWidget->update();
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -2394,9 +2368,11 @@ void MvMainWindow::setStationIdVisible(bool val) {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void MvMainWindow::setStationChannelCodesVisible(bool val) {
-	for ( StationDataCollection::iterator it = _stationDataCollection.begin();
-			it	!= _stationDataCollection.end(); it++ ) {
-		it->stationSymbolRef->setDrawFullID(val);
+	MvStationSymbol::setDrawFullID(val);
+
+	for ( auto it = _stationDataCollection.begin();
+	      it != _stationDataCollection.end(); ++it) {
+		it->stationSymbolRef->updateAnnotation();
 	}
 
 	_mapWidget->update();

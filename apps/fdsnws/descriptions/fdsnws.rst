@@ -109,10 +109,10 @@ Service configuration
    Therefore, real-time :ref:`global_recordstream` requests such as :ref:`rs-slink`
    should be avoided.
    If :ref:`rs-slink` is inevitable make use of the ``timeout`` and
-   ``retries`` parameters. E.g. set the :confval:`recordstream.source` to
-   ``localhost:18000?timeout=1&retries=0`` or in case of the :ref:`rs-combined`
+   ``retries`` parameters. E.g. set the :confval:`recordstream` to
+   ``slink://localhost:18000?timeout=1&retries=0`` or in case of the :ref:`rs-combined`
    service to
-   ``slink/localhost:18000?timeout=1&retries=0;sdsarchive//home/sysop/seiscomp/var/lib/archive``.
+   ``combined://slink/localhost:18000?timeout=1&retries=0;sdsarchive//home/sysop/seiscomp/var/lib/archive``.
 
 
 .. _sec-station:
@@ -124,6 +124,8 @@ Station
 * Request type: HTTP-GET, HTTP-POST
 * Stations may be filtered e.g. by geographic region and time, also the
   information depth level is selectable
+* Optionally handles time-based conditional HTTP-GET requests as specified by
+  `RFC 7232 <https://tools.ietf.org/html/rfc7232>`_.
 
 
 URL
@@ -571,7 +573,10 @@ clientID
   agent string
 
 userEmail
-  e-mail address of authenticated user if using restricted data.
+  e-mail address of authenticated user if using restricted data
+
+auth
+  True if user is authenticated (not anonymous)
 
 userLocation
   JSON object containing rough user location (eg., country) for statistic purposes
