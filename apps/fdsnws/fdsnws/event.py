@@ -323,13 +323,15 @@ class FDSNEvent(BaseResource):
                 return self.renderErrorPage(req, http.BAD_REQUEST, msg, ro)
 
         # (GFZ) If no constraints on the request, immediately reject it:
+        helpURL = "https://geofon.gfz-potsdam.de/waveform/webservices/fdsnws.php#event-size-limits"
         if ro.format in ("xml", "qml", "qml-rt", "sc3ml"):
             def constrained(ro):
                 if ro.depth or ro.mag or ro.limit:
                     return True
                 return False
             if not constrained(ro):
-                msg = "Request must be constrained to prevent it from being too large, see XXX"
+                msg = "Request must be constrained to prevent it from being too large."
+                msg += " More information at " + helpURL
                 return self.renderErrorPage(req, http.REQUEST_ENTITY_TOO_LARGE, msg, ro)
 
         # Create database query
