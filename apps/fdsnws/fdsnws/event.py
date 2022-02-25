@@ -326,7 +326,7 @@ class FDSNEvent(BaseResource):
         helpURL = "https://geofon.gfz-potsdam.de/waveform/webservices/fdsnws.php#event-size-limits"
         if ro.format in ("xml", "qml", "qml-rt", "sc3ml"):
             def constrained(ro):
-                if ro.depth or ro.mag or ro.limit:
+                if ro.depth or ro.eventIDs or ro.limit or ro.mag:
                     return True
                 return False
             if not constrained(ro):
