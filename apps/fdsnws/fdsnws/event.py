@@ -322,6 +322,16 @@ class FDSNEvent(BaseResource):
                       "not be loaded." % (ro.format, ro.Exporters[ro.format])
                 return self.renderErrorPage(req, http.BAD_REQUEST, msg, ro)
 
+        # (GFZ) If no constraints on the request, immediately reject it:
+        if ro.format in ("xml", "qml", "qml-rt", "sc3ml"):
+            def constrained(ro):
+                if ro.depth or ro.mag or ro.limit:
+                    return True
+                return False
+            if not constrained(ro):
+                msg = "Request must be constrained to prevent it from being too large, see XXX"
+                return self.renderErrorPage(req, http.REQUEST_ENTITY_TOO_LARGE, msg, ro)
+
         # Create database query
         db = DatabaseInterface.Open(Application.Instance().databaseURI())
         if db is None:
