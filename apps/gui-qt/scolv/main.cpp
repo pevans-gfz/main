@@ -32,6 +32,28 @@ class OLVApp : public Kicker<MainFrame> {
 		}
 
 	protected:
+
+		void printUsage() const {
+			std::cout << "Usage:" << std::endl
+			          << "  " << name() << " [options]"
+			          << std::endl << std::endl
+			          << "Review events and origins."
+			          << std::endl;
+
+			Seiscomp::Gui::Application::printUsage();
+
+			std::cout << "Examples:" << std::endl;
+			std::cout << "Execute scolv printing debug output on command line"
+			          << std::endl
+			          << "  scolv --debug"
+			          << std::endl << std::endl;
+
+			std::cout << "Execute scolv pre-loading an event given by its ID"
+			          << std::endl
+			          << "  scolv -E gempa2022abcd"
+			          << std::endl << std::endl;
+		}
+
 		bool initConfiguration() {
 			if ( !Kicker<MainFrame>::initConfiguration() )
 				return false;
@@ -49,24 +71,38 @@ class OLVApp : public Kicker<MainFrame> {
 			commandline().addOption("Options", "origin,O", "Preload origin", &_originID);
 			commandline().addOption("Options", "event,E", "Preload event",  &_eventID);
 			commandline().addOption("Options", "offline", "Switch to offline mode");
+			commandline().addOption("Options", "input-file,i", "Load events in given XML file during startup and switch to offline mode.", &_inputFile);
 			commandline().addOption("Options", "load-event-db", "Number of days to load from database", &_preloadDays);
 		}
 
 		bool validateParameters() {
 			if ( !Kicker<MainFrame>::validateParameters() ) return false;
 
-			if ( commandline().hasOption("offline") ) {
+			if ( commandline().hasOption("offline") || !_inputFile.empty() ) {
 				setMessagingEnabled(false);
-				if ( !isInventoryDatabaseEnabled() )
+				if ( !isInventoryDatabaseEnabled() ) {
 					setDatabaseEnabled(false, false);
+				}
 			}
 
 			return true;
 		}
 
+		bool handleInitializationError(int stage) override {
+			if ( stage == CONFIGMODULE || stage == INVENTORY ) {
+				return commandline().hasOption("offline");
+			}
+
+			return Kicker<MainFrame>::handleInitializationError(stage);
+		}
+
 		void setupUi(MainFrame* w) {
-			if ( commandline().hasOption("offline") )
+			if ( commandline().hasOption("offline") || !_inputFile.empty() ) {
 				w->setOffline(true);
+				if ( !_inputFile.empty() ) {
+					w->openFile(_inputFile);
+				}
+			}
 			else if ( !_eventID.empty() )
 				w->setEventID(_eventID);
 			else if ( !_originID.empty() )
@@ -78,6 +114,7 @@ class OLVApp : public Kicker<MainFrame> {
 	private:
 		std::string _originID;
 		std::string _eventID;
+		std::string _inputFile;
 		float _preloadDays;
 };
 

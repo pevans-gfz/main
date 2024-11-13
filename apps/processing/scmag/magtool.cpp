@@ -36,6 +36,7 @@
 #include <seiscomp/client/application.h>
 #include <seiscomp/utils/timer.h>
 
+#include <algorithm>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -255,6 +256,15 @@ void MagTool::setSummaryMagnitudeType(const std::string &type) {
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+void MagTool::setSummaryMagnitudeSingleton(bool singleton) {
+	_summaryMagnitudeSingleton = singleton;
+}
+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
+
+
+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void MagTool::setSummaryMagnitudeBlacklist(const std::vector<std::string> &list) {
 	std::copy(list.begin(), list.end(), std::inserter(_summaryMagnitudeBlacklist, _summaryMagnitudeBlacklist.end()));
 }
@@ -316,7 +326,7 @@ bool MagTool::init(const MagnitudeTypes &mags, const Core::TimeSpan &expiry,
 	_cacheSize = expiry;
 	_objectCache.setDatabaseArchive(SCCoreApp->query());
 	_objectCache.setTimeSpan(_cacheSize);
-	_objectCache.setPopCallback(std::bind1st(std::mem_fun(&MagTool::publicObjectRemoved), this));
+	_objectCache.setPopCallback(std::bind(&MagTool::publicObjectRemoved, this, std::placeholders::_1));
 
 	_dbAccesses = 0;
 	_allowReprocessing = allowReprocessing;
@@ -355,7 +365,7 @@ bool MagTool::init(const MagnitudeTypes &mags, const Core::TimeSpan &expiry,
 			if ( proc ) {
 				_processors.insert(ProcessorList::value_type(proc->amplitudeType(), proc));
 				double estimation, stdError;
-				if ( proc->estimateMw(6.0, estimation, stdError) != MagnitudeProcessor::MwEstimationNotSupported ) {
+				if ( proc->estimateMw(&SCCoreApp->configuration(), 6.0, estimation, stdError) != MagnitudeProcessor::MwEstimationNotSupported ) {
 					logMagTypes += '\n';
 					logMagTypes += " * ";
 					logMagTypes += proc->typeMw();
@@ -363,29 +373,35 @@ bool MagTool::init(const MagnitudeTypes &mags, const Core::TimeSpan &expiry,
 
 					sumMagTypes += " * ";
 					sumMagTypes += proc->typeMw();
-					if ( isTypeEnabledForSummaryMagnitude(proc->typeMw()) )
+					if ( isTypeEnabledForSummaryMagnitude(proc->typeMw()) ) {
 						sumMagTypes += ": OK";
-					else
+					}
+					else {
 						sumMagTypes += ": Disabled";
+					}
 					sumMagTypes += '\n';
 
 				}
 			}
 
 			AverageMethods::iterator am_it = _magnitudeAverageMethods.find(*it);
-			if ( am_it == _magnitudeAverageMethods.end() )
+			if ( am_it == _magnitudeAverageMethods.end() ) {
 				logMagAverageTypes += "default";
-			else
+			}
+			else {
 				logMagAverageTypes += averageMethodToString(am_it->second);
+			}
 
 			logMagAverageTypes += "\n";
 
 			sumMagTypes += " * ";
 			sumMagTypes += *it;
-			if ( isTypeEnabledForSummaryMagnitude(*it) )
+			if ( isTypeEnabledForSummaryMagnitude(*it) ) {
 				sumMagTypes += ": OK";
-			else
+			}
+			else {
 				sumMagTypes += ": Disabled";
+			}
 			sumMagTypes += '\n';
 
 			++it;
@@ -394,17 +410,21 @@ bool MagTool::init(const MagnitudeTypes &mags, const Core::TimeSpan &expiry,
 		logMagTypes += '\n';
 	}
 
-	SEISCOMP_INFO("Magnitudes to calculate:\n%s", logMagTypes.c_str());
-	SEISCOMP_INFO("Average methods:\n%s", logMagAverageTypes.c_str());
-	SEISCOMP_INFO("Summary magnitude enabled = %s", _summaryMagnitudeEnabled?"yes":"no");
-	SEISCOMP_INFO("Summary magnitudes:\n%s", sumMagTypes.c_str());
-	SEISCOMP_INFO("Using default summary coefficients: a = %.2f, b = %.2f",
-	              *_defaultCoefficients.a, *_defaultCoefficients.b);
-
-	for ( auto it : _magnitudeCoefficients ) {
-		SEISCOMP_INFO("Using '%s' summary coefficients: a = %s, b = %s",
-		              it.first.c_str(), it.second.a?toString(*it.second.a).c_str():"[default]",
-		              it.second.b?toString(*it.second.b).c_str():"[default]");
+	SEISCOMP_INFO("Magnitude types to calculate:\n%s", logMagTypes.c_str());
+	SEISCOMP_INFO("Magnitude types - averaging methods:\n%s", logMagAverageTypes.c_str());
+	SEISCOMP_INFO("Summary magnitude enabled:                         %s",
+	              _summaryMagnitudeEnabled?"yes":"no");
+	if ( _summaryMagnitudeEnabled ) {
+		SEISCOMP_INFO("Summary magnitude from only one network magnitude: %s",
+		              _summaryMagnitudeSingleton?"yes":"no");
+		SEISCOMP_INFO("Summary magnitude - default coefficients:          a = %.2f, b = %.2f",
+		              *_defaultCoefficients.a, *_defaultCoefficients.b);
+		SEISCOMP_INFO("Summary magnitude calculated from:\n%s", sumMagTypes.c_str());
+		for ( auto &it : _magnitudeCoefficients ) {
+			SEISCOMP_INFO("Summary magnitude uses '%s' with coefficients: a = %s, b = %s",
+			              it.first.c_str(), it.second.a?toString(*it.second.a).c_str():"[default]",
+			              it.second.b?toString(*it.second.b).c_str():"[default]");
+		}
 	}
 
 	// Fill the origin cache
@@ -428,7 +448,7 @@ bool MagTool::init(const MagnitudeTypes &mags, const Core::TimeSpan &expiry,
 			}
 		}
 
-		for ( auto origin : fetchedOrigins ) {
+		for ( auto &origin : fetchedOrigins ) {
 			SEISCOMP_DEBUG("Load origin %s", origin->publicID().c_str());
 			SCCoreApp->query()->load(origin.get());
 		}
@@ -508,16 +528,9 @@ DataModel::StationMagnitude *MagTool::getStationMagnitude(
 
 	}
 	else {
-		Time now = Time::GMT();
-		try { mag->creationInfo().setModificationTime(now); }
-		catch ( ... ) {
-			DataModel::CreationInfo ci;
-			ci.setModificationTime(now);
-			mag->setCreationInfo(ci);
-		}
-
+		DataModel::touch(mag);
 		mag->update();
-		SCCoreApp->logObject(outputMagLog, now);
+		SCCoreApp->logObject(outputMagLog, Core::Time::GMT());
 	}
 
 	if ( origin != mag->parent() ) {
@@ -546,9 +559,9 @@ DataModel::StationMagnitude *MagTool::getStationMagnitude(
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-DataModel::Magnitude *MagTool::getMagnitude(DataModel::Origin* origin,
+DataModel::Magnitude *MagTool::getMagnitude(DataModel::Origin *origin,
                                             const std::string &type,
-                                            bool* newInstance) const {
+                                            bool *newInstance) const {
 	DataModel::Magnitude *mag = nullptr;
 	for ( size_t i = 0; i < origin->magnitudeCount(); ++i ) {
 		NetMag *nmag = origin->magnitude(i);
@@ -559,10 +572,11 @@ DataModel::Magnitude *MagTool::getMagnitude(DataModel::Origin* origin,
 	}
 
 	if ( !mag ) {
-		if ( SCCoreApp->hasCustomPublicIDPattern() )
+		if ( SCCoreApp->hasCustomPublicIDPattern() ) {
 			mag = NetMag::Create();
+		}
 		else {
-			std::string id = origin->publicID() + "/netMag/" + type;
+			string id = origin->publicID() + "/netMag/" + type;
 			mag = NetMag::Create(id);
 		}
 
@@ -582,7 +596,11 @@ DataModel::Magnitude *MagTool::getMagnitude(DataModel::Origin* origin,
 		mag->setType(type);
 		origin->add(mag);
 
-		if ( newInstance ) *newInstance = true;
+		if ( newInstance ) {
+			*newInstance = true;
+		}
+
+		SC_FMT_DEBUG("A NETMAG {}", mag->publicID());
 	}
 	else {
 		if ( !_allowReprocessing ) {
@@ -608,11 +626,14 @@ DataModel::Magnitude *MagTool::getMagnitude(DataModel::Origin* origin,
 			}
 			catch ( ... ) {}
 
-			if ( rejectProcessing )
+			if ( rejectProcessing ) {
 				return nullptr;
+			}
 		}
 
-		if ( newInstance ) *newInstance = false;
+		if ( newInstance ) {
+			*newInstance = false;
+		}
 	}
 
 	return mag;
@@ -632,18 +653,15 @@ DataModel::Magnitude *MagTool::getMagnitude(DataModel::Origin *origin,
 	if ( mag ) {
 		mag->setMagnitude(value);
 		if ( !tmpNewInstance ) {
-			Time now = Time::GMT();
-			try { mag->creationInfo().setModificationTime(now); }
-			catch ( ... ) {
-				DataModel::CreationInfo ci;
-				ci.setModificationTime(now);
-				mag->setCreationInfo(ci);
-			}
+			DataModel::touch(mag);
 			mag->update();
-			SCCoreApp->logObject(outputMagLog, now);
+			SCCoreApp->logObject(outputMagLog, Core::Time::GMT());
+			SC_FMT_DEBUG("U NETMAG {}: {}", mag->publicID(), value);
 		}
 
-		if ( newInstance ) *newInstance = tmpNewInstance;
+		if ( newInstance ) {
+			*newInstance = tmpNewInstance;
+		}
 	}
 
 	return mag;
@@ -822,7 +840,7 @@ bool MagTool::computeNetworkMagnitude(DataModel::Origin *origin, const std::stri
 
 	set<StationMagnitudeContribution*> refs;
 
-	for ( auto stationMagnitude : stationMagnitudes ) {
+	for ( auto &stationMagnitude : stationMagnitudes ) {
 		StationMagnitudeContributionPtr magRef =
 			netMag->stationMagnitudeContribution(stationMagnitude->publicID());
 
@@ -853,10 +871,12 @@ bool MagTool::computeNetworkMagnitude(DataModel::Origin *origin, const std::stri
 			  || oldResidual != residual
 			  || bool(staCount > 0) != hasResidual ) {
 				magRef->setWeight(weights[weightIndex]);
-				if ( staCount )
+				if ( staCount ) {
 					magRef->setResidual(residual);
-				else
+				}
+				else {
 					magRef->setResidual(Core::None);
+				}
 				magRef->update();
 				SEISCOMP_DEBUG("Updating magnitude reference for %s", stationMagnitude->publicID().c_str());
 			}
@@ -867,7 +887,7 @@ bool MagTool::computeNetworkMagnitude(DataModel::Origin *origin, const std::stri
 	}
 
 	// Associate zero weight magnitudes with weight 0
-	for ( auto stationMagnitude : stationMagnitudesZeroWeight ) {
+	for ( auto &stationMagnitude : stationMagnitudesZeroWeight ) {
 		StationMagnitudeContributionPtr magRef =
 			netMag->stationMagnitudeContribution(stationMagnitude->publicID());
 
@@ -898,10 +918,12 @@ bool MagTool::computeNetworkMagnitude(DataModel::Origin *origin, const std::stri
 			  || oldResidual != residual
 			  || bool(staCount > 0) != hasResidual ) {
 				magRef->setWeight(0.0);
-				if ( staCount )
+				if ( staCount ) {
 					magRef->setResidual(residual);
-				else
+				}
+				else {
 					magRef->setResidual(Core::None);
+				}
 				magRef->update();
 				SEISCOMP_DEBUG("Updating magnitude reference for %s", stationMagnitude->publicID().c_str());
 			}
@@ -928,20 +950,23 @@ bool MagTool::computeNetworkMagnitude(DataModel::Origin *origin, const std::stri
 		}
 	}
 
-	ProcessorList::iterator it = _processors.find(mtype);
+	// Find the magnitude processor for this mag type
+	ProcessorList::iterator it;
+	for ( it = _processors.begin(); it != _processors.end(); it++ ) {
+		if ( it->second->type() == mtype ) break;
+	}
 	if ( it == _processors.end() ) return false;
 
 	if ( staCount ) {
 		double Mw;
 		double MwStdev;
-		MagnitudeProcessor::Status res = it->second->estimateMw(value, Mw, MwStdev);
+		MagnitudeProcessor::Status res = it->second->estimateMw(&SCCoreApp->configuration(), value, Mw, MwStdev);
 		if ( res == MagnitudeProcessor::OK ) {
 			MwStdev = *stdev > MwStdev ? *stdev : MwStdev;
 			//MwStdev = stdev;
 			netMag = getMagnitude(origin, it->second->typeMw(), Mw);
 			if ( netMag ) {
 				netMag->setStationCount(staCount);
-
 				netMag->setEvaluationStatus(Core::None);
 				netMag->magnitude().setUncertainty(MwStdev);
 				netMag->magnitude().setLowerUncertainty(Core::None);
@@ -960,71 +985,106 @@ bool MagTool::computeNetworkMagnitude(DataModel::Origin *origin, const std::stri
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool MagTool::computeSummaryMagnitude(DataModel::Origin *origin) {
-	if ( !_summaryMagnitudeEnabled ) return false;
-	if ( _summaryMagnitudeType.empty() ) return false;
+	if ( !_summaryMagnitudeEnabled ) {
+		SEISCOMP_DEBUG("Skipping summary magnitude: calculation is disabled by "
+		               "configuration");
+		return false;
+	}
 
-	double value = 0.0, totalWeight = 0.0;
+	if ( _summaryMagnitudeType.empty() ) {
+		SEISCOMP_DEBUG("Skipping summary magnitude: empty type (name)");
+		return false;
+	}
+
+	double value = 0.0;
+	double totalWeight = 0.0;
 	int count = 0;
+	int networkMagnitudeCount = 0;
 
 	for ( size_t i = 0; i < origin->magnitudeCount(); ++i ) {
 		NetMag *nmag = origin->magnitude(i);
 		const std::string &type = nmag->type();
 		int n = 0;
 
-		if ( type == _summaryMagnitudeType )
+		if ( type == _summaryMagnitudeType ) {
 			continue;
+		}
 
 		try {
 			// Ignore rejected magnitudes
-			if ( nmag->evaluationStatus() == DataModel::REJECTED )
+			if ( nmag->evaluationStatus() == DataModel::REJECTED ) {
 				continue;
+			}
 		}
 		catch ( ... ) {}
 
-		if ( !isTypeEnabledForSummaryMagnitude(type) ) continue;
+		if ( !isTypeEnabledForSummaryMagnitude(type) ) {
+			continue;
+		}
 
 		try { n = nmag->stationCount(); }
 		catch ( ... ) {}
 
-		if ( n < _summaryMagnitudeMinStationCount ) continue;
+		if ( n < _summaryMagnitudeMinStationCount ) {
+			SEISCOMP_DEBUG("Summary magnitude: Skipping '%s' with only %ld "
+			               "station magnitude(s)", type.c_str(), n);
+			continue;
+		}
 
 		double a = *_defaultCoefficients.a, b=*_defaultCoefficients.b; // defaults
 
 		Coefficients::iterator it = _magnitudeCoefficients.find(type);
 		if ( it != _magnitudeCoefficients.end() ) {
-			if ( it->second.a ) a = *(it->second.a);
-			if ( it->second.b ) b = *(it->second.b);
+			if ( it->second.a ) {
+				a = *(it->second.a);
+			}
+
+			if ( it->second.b ) {
+				b = *(it->second.b);
+			}
 		}
 
 		double weight = a*n+b;
-		if ( weight <= 0 )
+		if ( weight <= 0 ) {
 			continue;
+		}
+
+		networkMagnitudeCount += 1;
 
 		totalWeight += weight;
 		value += weight*nmag->magnitude().value();
 		// The total count is currently the maximum count for any individual magnitude.
 		// FIXME: Something better is needed here.
-		count  = n > count ? n : count;
+		count = n > count ? n : count;
+	}
+
+	if ( !_summaryMagnitudeSingleton && networkMagnitudeCount < 2 ) {
+		SEISCOMP_DEBUG("Summary magnitude skipped: only %ld network magnitude(s) "
+		               "available", networkMagnitudeCount);
+		return false;
 	}
 
 	// No magnitudes available
-	if ( totalWeight == 0 )
+	if ( totalWeight == 0 ) {
+		SEISCOMP_DEBUG("Summary magnitude skipped: total weight = 0");
 		return false;
+	}
 
 	// Simple average
 	value = value / totalWeight;
 
 	bool newInstance;
 	NetMagPtr mag = getMagnitude(origin, _summaryMagnitudeType, &newInstance);
-	if ( !mag )
+	if ( !mag ) {
 		return false;
+	}
 
 	if ( !newInstance ) {
 		try {
 			// Check for changes otherwise discard the update
 			if ( fabs(mag->magnitude().value() - value) < 0.0001 &&
 			     mag->stationCount() == count ) {
-				SEISCOMP_DEBUG("Skipping summary magnitude update, nothing changed");
+				SEISCOMP_DEBUG("Summary magnitude update skipped: nothing changed");
 				return false;
 			}
 		}
@@ -1032,15 +1092,10 @@ bool MagTool::computeSummaryMagnitude(DataModel::Origin *origin) {
 			SEISCOMP_WARNING("Checking existing summary magnitude: %s", ex.what());
 		}
 
-		Time now = Time::GMT();
-		try { mag->creationInfo().setModificationTime(now); }
-		catch ( ... ) {
-			DataModel::CreationInfo ci;
-			ci.setModificationTime(now);
-			mag->setCreationInfo(ci);
-		}
+		DataModel::touch(mag.get());
 		mag->update();
-		SCCoreApp->logObject(outputMagLog, now);
+		SCCoreApp->logObject(outputMagLog, Core::Time::GMT());
+		SC_FMT_DEBUG("U NETMAG {}: {}", mag->publicID(), value);
 	}
 
 	mag->setMagnitude(value);
@@ -1319,8 +1374,9 @@ bool MagTool::processOrigin(DataModel::Origin* origin) {
 
 	retrieveMissingPicksAndArrivalsFromDB(origin);
 
-	if ( _staticUpdate )
+	if ( _staticUpdate ) {
 		return processOriginUpdateOnly(origin);
+	}
 
 	double depth;
 
@@ -1395,7 +1451,7 @@ bool MagTool::processOrigin(DataModel::Origin* origin) {
 		e.second = LocationAndDistance(sloc, arr->distance());
 	}
 
-	for ( auto it : pickStreamMap ) {
+	for ( auto &it : pickStreamMap ) {
 		const string &pickID = it.second.first->publicID();
 		DataModel::SensorLocation *loc = it.second.second.first;
 		double distance = it.second.second.second;
@@ -1403,27 +1459,26 @@ bool MagTool::processOrigin(DataModel::Origin* origin) {
 		SEISCOMP_DEBUG("using pick %s", pickID.c_str());
 
 		// Loop over amplitudes
-		pair<StaAmpMap::iterator, StaAmpMap::iterator>
-			itp = _ampl.equal_range(pickID);
+		auto itp = _ampl.equal_range(pickID);
 
 		// Collect all amplitudes of certain type with highest priority
 		map<string, const DataModel::Amplitude*> usedAmplitudes;
 		
-		for (StaAmpMap::iterator
-		     it = itp.first; it != itp.second; ++it) {
-			const DataModel::Amplitude *ampl  = ((*it).second).get();
-			map<string, const DataModel::Amplitude*>::iterator amp_it;
+		for ( auto itpi = itp.first; itpi != itp.second; ++itpi ) {
+			const DataModel::Amplitude *ampl  = itpi->second.get();
+			auto amp_it = usedAmplitudes.find(ampl->type());
 
-			amp_it = usedAmplitudes.find(ampl->type());
-			// New entry? Store amplitude
-			if ( amp_it == usedAmplitudes.end() )
+			if ( amp_it == usedAmplitudes.end() ) {
+				// New entry -> store amplitude
 				usedAmplitudes[ampl->type()] = ampl;
-			// If an amplitude for a particular type is stored already check
-			// its priority and replace it
+			}
 			else {
+				// If an amplitude for a particular type is stored already check
+				// its priority and replace it
 				const DataModel::Amplitude *stored_ampl = amp_it->second;
-				if ( hasHigherPriority(ampl, stored_ampl) )
+				if ( hasHigherPriority(ampl, stored_ampl) ) {
 					amp_it->second = ampl;
+				}
 			}
 
 			// Highest priority has the amplitude which is already associated
@@ -1441,19 +1496,22 @@ bool MagTool::processOrigin(DataModel::Origin* origin) {
 					}
 				}
 
-				if ( ok ) break;
+				if ( ok ) {
+					break;
+				}
 			}
 		}
 
 		// Compute magnitudes of used amplitudes
-		for ( auto amp_it : usedAmplitudes ) {
+		for ( auto &amp_it : usedAmplitudes ) {
 			const DataModel::Amplitude *ampl  = amp_it.second;
 			const string &aid   = ampl->publicID();
 
 			MagnitudeList mags;
 
-			if ( !computeStationMagnitude(ampl, origin, loc, distance, depth, mags) )
+			if ( !computeStationMagnitude(ampl, origin, loc, distance, depth, mags) ) {
 				continue;
+			}
 
 			for ( const auto &entry : mags ) {
 				StaMagPtr stationMagnitude = getStationMagnitude(origin, ampl->waveformID(), entry.proc->type(), entry.value, _allowReprocessing);
@@ -1475,15 +1533,10 @@ bool MagTool::processOrigin(DataModel::Origin* origin) {
 		if ( netMag ) {
 			computeNetworkMagnitude(origin, mtype, netMag);
 			if ( !newInstance ) {
-				Time now = Time::GMT();
-				try { netMag->creationInfo().setModificationTime(now); }
-				catch ( ... ) {
-					DataModel::CreationInfo ci;
-					ci.setModificationTime(now);
-					netMag->setCreationInfo(ci);
-				}
+				DataModel::touch(netMag.get());
 				netMag->update();
-				SCCoreApp->logObject(outputMagLog, now);
+				SCCoreApp->logObject(outputMagLog, Core::Time::GMT());
+				SC_FMT_DEBUG("U NETMAG {}: {}", netMag->publicID(), netMag->magnitude().value());
 			}
 		}
 	}
@@ -1499,7 +1552,7 @@ bool MagTool::processOrigin(DataModel::Origin* origin) {
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-bool MagTool::processOriginUpdateOnly(DataModel::Origin* origin) {
+bool MagTool::processOriginUpdateOnly(DataModel::Origin *origin) {
 	DataModel::Magnitude *netMag;
 	DataModel::StationMagnitudeContribution *contrib;
 	DataModel::StationMagnitude *staMag;
@@ -1704,7 +1757,7 @@ bool MagTool::processOriginUpdateOnly(DataModel::Origin* origin) {
 
 		if ( !mv.empty() ) {
 			string methodID;
-			double val, stdev;
+			double val, stdev = 0.0;
 
 			if ( _keepWeights ) {
 				// Use preset weights
@@ -1740,17 +1793,20 @@ bool MagTool::processOriginUpdateOnly(DataModel::Origin* origin) {
 					}
 				}
 				else {
-					if ( !Math::Statistics::average(mv, weights, val, stdev) )
+					if ( !Math::Statistics::average(mv, weights, val, stdev) ) {
 						return false;
+					}
 				}
 			}
-			else if ( !computeAverage(averageMethod, mv, weights, methodID, val, stdev) )
+			else if ( !computeAverage(averageMethod, mv, weights, methodID, val, stdev) ) {
 				return false;
+			}
 
 			if ( stdev > _warningLevel ) {
 				string mID = "mean with preset weights";
-				if ( !_keepWeights )
+				if ( !_keepWeights ) {
 					mID = methodID;
+				}
 				SEISCOMP_WARNING("Exceedence of warning level - magnitude type: %s method: %s value: %.2f stdev: %.2f",
 				                 netMag->type().c_str(), mID.c_str(), val, stdev);
 			}
@@ -1937,7 +1993,7 @@ bool MagTool::feed(DataModel::Amplitude* ampl, bool update, bool remove) {
 
 		dbit.close();
 
-		for ( auto origin : reloadOrigins ) {
+		for ( auto &origin : reloadOrigins ) {
 			SEISCOMP_DEBUG("Load children from database for origin %s",
 			               origin->publicID().c_str());
 			SCCoreApp->query()->load(origin.get());
@@ -2083,7 +2139,12 @@ bool MagTool::feed(DataModel::Amplitude* ampl, bool update, bool remove) {
 				NetMagPtr netMag = getMagnitude(origin.get(), mtype, &newInstance);
 				if ( netMag ) {
 					computeNetworkMagnitude(origin.get(), mtype, netMag);
-					if ( ! newInstance ) netMag->update();
+					if ( !newInstance ) {
+						DataModel::touch(netMag.get());
+						netMag->update();
+						SCCoreApp->logObject(outputMagLog, Core::Time::GMT());
+						SC_FMT_DEBUG("U NETMAG {}: {}", netMag->publicID(), netMag->magnitude().value());
+					}
 
 					SEISCOMP_INFO("feed(Amplitude): %s Magnitude '%s' for Origin '%s'",
 					              newInstance?"created":"updated",
@@ -2109,12 +2170,17 @@ bool MagTool::feed(DataModel::Amplitude* ampl, bool update, bool remove) {
 				}
 			}
 
-			for ( auto mtype : mtypes ) {
+			for ( auto &mtype : mtypes ) {
 				bool newInstance;
 				NetMagPtr netMag = getMagnitude(origin.get(), mtype, &newInstance);
 				if ( netMag ) {
 					computeNetworkMagnitude(origin.get(), mtype, netMag);
-					if ( ! newInstance ) netMag->update();
+					if ( !newInstance ) {
+						DataModel::touch(netMag.get());
+						netMag->update();
+						SCCoreApp->logObject(outputMagLog, Core::Time::GMT());
+						SC_FMT_DEBUG("U NETMAG {}: {}", netMag->publicID(), netMag->magnitude().value());
+					}
 
 					SEISCOMP_INFO("feed(Amplitude): %s Magnitude '%s' for Origin '%s'",
 					              newInstance?"created":"updated",

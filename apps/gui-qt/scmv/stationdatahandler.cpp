@@ -15,6 +15,7 @@
 #include "stationdatahandler.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 #define SEISCOMP_COMPONENT mapview
@@ -72,7 +73,7 @@ void RecordHandler::handle(StationData* stationData, Record* record) {
 		stationData->gmFilter->setSamplingFrequency(record->samplingFrequency());
 		stationData->gmFilter->apply(dataSize, data);
 	}
-	catch (Core::GeneralException &e) {
+	catch ( std::exception &e ) {
 		SEISCOMP_WARNING("Could not filter record %s.%s.%s.%s (%fHz): %s",
 		                 record->networkCode().c_str(),
 		                 record->stationCode().c_str(),
@@ -84,7 +85,7 @@ void RecordHandler::handle(StationData* stationData, Record* record) {
 
 	double* begin = data;
 	double* maximumSample = std::max_element(begin, data + dataSize,
-	                                         std::ptr_fun(RecordHandlerCompare));
+	                                         RecordHandlerCompare);
 
 	*maximumSample = fabs(*maximumSample);
 
@@ -288,7 +289,7 @@ int TriggerHandler::calculateFrameSizeFromAmplitude(double amplitude) const {
 	else if ( frameSize < STATION_MINIMUM_FRAME_SIZE )
 		frameSize = STATION_MINIMUM_FRAME_SIZE;
 
-	return static_cast<int>(Math::round(frameSize));
+	return static_cast<int>(round(frameSize));
 }
 
 

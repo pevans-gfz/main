@@ -12,8 +12,9 @@
  ***************************************************************************/
 
 
-#ifndef SEISCOMP_QC_QCRMS_H__
-#define SEISCOMP_QC_QCRMS_H__
+#ifndef SEISCOMP_QC_QCRMS_H
+#define SEISCOMP_QC_QCRMS_H
+
 
 #include <seiscomp/plugins/qc/qcplugin.h>
 
@@ -24,20 +25,20 @@ namespace Qc {
 
 
 DEFINE_SMARTPOINTER(QcPluginRms);
-
 class QcPluginRms : public QcPlugin {
 	DECLARE_SC_CLASS(QcPluginRms);
 
-public:
-	QcPluginRms();
-	bool init(QcApp* app, QcConfig *cfg, std::string streamID);
-	std::string registeredName() const;
-	std::vector<std::string> parameterNames() const;
+	public:
+		QcPluginRms();
+
+	public:
+		bool init(QcApp* app, QcConfig *cfg, std::string streamID) override;
 };
 
 
+}
+}
+}
 
-}
-}
-}
+
 #endif

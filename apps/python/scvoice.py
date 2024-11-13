@@ -204,6 +204,21 @@ class VoiceAlert(client.Application):
 
         return True
 
+    def printUsage(self):
+
+        print('''Usage:
+  scvoice [options]
+
+Alert the user acoustically in real time.
+''')
+
+        client.Application.printUsage(self)
+
+        print('''Examples:
+Execute scvoice on command line with debug output
+  scvoice --debug
+''')
+
     def run(self):
         try:
             try:
@@ -256,6 +271,10 @@ class VoiceAlert(client.Application):
         except BaseException:
             logging.error(
                 "Failed to start alert script '%s'" % self._alertScript)
+
+    def done(self):
+        self._cache = None
+        client.Application.done(self)
 
     def handleMessage(self, msg):
         try:
@@ -417,11 +436,11 @@ class VoiceAlert(client.Application):
     #       return
 
             if dt > 3600:
-                dt = "%d hours %d minutes ago" % (dt/3600, (dt % 3600)/60)
+                dt = "%d hours %d minutes ago" % (int(dt / 3600), int((dt % 3600) / 60))
             elif dt > 120:
-                dt = "%d minutes ago" % (dt/60)
+                dt = "%d minutes ago" % int(dt / 60)
             else:
-                dt = "%d seconds ago" % dt
+                dt = "%d seconds ago" % int(dt)
 
             if preliminary:
                 message = "earthquake, preliminary, %%s, %s" % dsc

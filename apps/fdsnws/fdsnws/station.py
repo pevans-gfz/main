@@ -22,8 +22,6 @@
 # Email:   herrnkind@gempa.de
 ################################################################################
 
-from __future__ import absolute_import, division, print_function
-
 from twisted.internet.threads import deferToThread
 from twisted.web import http, server
 
@@ -37,43 +35,51 @@ from .http import BaseResource
 from .request import RequestOptions
 from . import utils
 
-VERSION = "1.1.3"
+VERSION = "1.1.5"
 
 ################################################################################
 
 
 class _StationRequestOptions(RequestOptions):
-
-    Exporters = {'xml': 'fdsnxml',
-                 'fdsnxml': 'fdsnxml',
-                 'stationxml': 'staxml',
-                 'sc3ml': 'trunk'}
+    Exporters = {
+        "xml": "fdsnxml",
+        "fdsnxml": "fdsnxml",
+        "stationxml": "staxml",
+        "sc3ml": "trunk",
+    }
     MinTime = Time(0, 1)
 
-    VText = ['text']
-    #OutputFormats = list(Exporters) + VText
-    #Default format must be the first, list(Exporters) has random order
-    OutputFormats = ['xml', 'fdsnxml', 'stationxml', 'sc3ml'] + VText
+    VText = ["text"]
+    # OutputFormats = list(Exporters) + VText
+    # Default format must be the first, list(Exporters) has random order
+    OutputFormats = ["xml", "fdsnxml", "stationxml", "sc3ml"] + VText
 
-    PLevel = ['level']
-    PIncludeRestricted = ['includerestricted']
-    PIncludeAvailability = ['includeavailability']
-    PUpdateAfter = ['updateafter']
-    PMatchTimeSeries = ['matchtimeseries']
+    PLevel = ["level"]
+    PIncludeRestricted = ["includerestricted"]
+    PIncludeAvailability = ["includeavailability"]
+    PUpdateAfter = ["updateafter"]
+    PMatchTimeSeries = ["matchtimeseries"]
 
     # non standard parameters
-    PFormatted = ['formatted']
+    PFormatted = ["formatted"]
 
-    POSTParams = RequestOptions.POSTParams + RequestOptions.GeoParams + \
-        PLevel + PIncludeRestricted + PIncludeAvailability + \
-        PUpdateAfter + PMatchTimeSeries + PFormatted
-    GETParams = RequestOptions.GETParams + RequestOptions.WindowTimeParams + \
-        POSTParams
+    POSTParams = (
+        RequestOptions.POSTParams
+        + RequestOptions.GeoParams
+        + PLevel
+        + PIncludeRestricted
+        + PIncludeAvailability
+        + PUpdateAfter
+        + PMatchTimeSeries
+        + PFormatted
+    )
+    GETParams = RequestOptions.GETParams + RequestOptions.WindowTimeParams + POSTParams
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def __init__(self):
-        RequestOptions.__init__(self)
-        self.service = 'fdsnws-station'
+        super().__init__()
+
+        self.service = "fdsnws-station"
 
         self.includeSta = True
         self.includeCha = False
@@ -87,7 +93,7 @@ class _StationRequestOptions(RequestOptions):
         # non standard parameters
         self.formatted = None
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def parse(self):
         self.parseTime(True)
         self.parseChannel()
@@ -98,14 +104,14 @@ class _StationRequestOptions(RequestOptions):
         key, value = self.getFirstValue(self.PLevel)
         if value is not None:
             value = value.lower()
-            if value in ('network', 'net'):
+            if value in ("network", "net"):
                 self.includeSta = False
-            elif value in ('channel', 'cha', 'chan'):
+            elif value in ("channel", "cha", "chan"):
                 self.includeCha = True
-            elif value in ('response', 'res', 'resp'):
+            elif value in ("response", "res", "resp"):
                 self.includeCha = True
                 self.includeRes = True
-            elif value not in ('station', 'sta'):
+            elif value not in ("station", "sta"):
                 self.raiseValueError(key)
 
         # includeRestricted (optional)
@@ -123,7 +129,7 @@ class _StationRequestOptions(RequestOptions):
         # format XML
         self.formatted = self.parseBool(self.PFormatted)
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def networkIter(self, inv, matchTime=False):
         for i in range(inv.networkCount()):
             net = inv.network(i)
@@ -145,7 +151,7 @@ class _StationRequestOptions(RequestOptions):
                 yield net
                 break
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def stationIter(self, net, matchTime=False):
         for i in range(net.stationCount()):
             sta = net.station(i)
@@ -162,8 +168,10 @@ class _StationRequestOptions(RequestOptions):
 
             for ro in self.streams:
                 # station code
-                if ro.channel and (not ro.channel.matchSta(sta.code()) or
-                                   not ro.channel.matchNet(net.code())):
+                if ro.channel and (
+                    not ro.channel.matchSta(sta.code())
+                    or not ro.channel.matchNet(net.code())
+                ):
                     continue
 
                 # start and end time
@@ -178,16 +186,18 @@ class _StationRequestOptions(RequestOptions):
                 yield sta
                 break
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def locationIter(self, net, sta, matchTime=False):
         for i in range(sta.sensorLocationCount()):
             loc = sta.sensorLocation(i)
 
             for ro in self.streams:
                 # location code
-                if ro.channel and (not ro.channel.matchLoc(loc.code()) or
-                                   not ro.channel.matchSta(sta.code()) or
-                                   not ro.channel.matchNet(net.code())):
+                if ro.channel and (
+                    not ro.channel.matchLoc(loc.code())
+                    or not ro.channel.matchSta(sta.code())
+                    or not ro.channel.matchNet(net.code())
+                ):
                     continue
 
                 # start and end time
@@ -202,17 +212,19 @@ class _StationRequestOptions(RequestOptions):
                 yield loc
                 break
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def streamIter(self, net, sta, loc, matchTime, dac):
         for i in range(loc.streamCount()):
             stream = loc.stream(i)
 
             for ro in self.streams:
                 # stream code
-                if ro.channel and (not ro.channel.matchCha(stream.code()) or
-                                   not ro.channel.matchLoc(loc.code()) or
-                                   not ro.channel.matchSta(sta.code()) or
-                                   not ro.channel.matchNet(net.code())):
+                if ro.channel and (
+                    not ro.channel.matchCha(stream.code())
+                    or not ro.channel.matchLoc(loc.code())
+                    or not ro.channel.matchSta(sta.code())
+                    or not ro.channel.matchNet(net.code())
+                ):
                     continue
 
                 # start and end time
@@ -226,10 +238,12 @@ class _StationRequestOptions(RequestOptions):
 
                 # match data availability extent
                 if dac is not None and self.matchTimeSeries:
-                    extent = dac.extent(net.code(), sta.code(), loc.code(),
-                                        stream.code())
-                    if extent is None or (ro.time and
-                                          not ro.time.match(extent.start(), extent.end())):
+                    extent = dac.extent(
+                        net.code(), sta.code(), loc.code(), stream.code()
+                    )
+                    if extent is None or (
+                        ro.time and not ro.time.match(extent.start(), extent.end())
+                    ):
                         continue
 
                 yield stream
@@ -240,10 +254,18 @@ class _StationRequestOptions(RequestOptions):
 class FDSNStation(BaseResource):
     isLeaf = True
 
-    #---------------------------------------------------------------------------
-    def __init__(self, inv, restricted, maxObj, daEnabled,
-                 conditionalRequestsEnabled, timeInventoryLoaded):
-        BaseResource.__init__(self, VERSION)
+    # ---------------------------------------------------------------------------
+    def __init__(
+        self,
+        inv,
+        restricted,
+        maxObj,
+        daEnabled,
+        conditionalRequestsEnabled,
+        timeInventoryLoaded,
+    ):
+        super().__init__(VERSION)
+
         self._inv = inv
         self._allowRestricted = restricted
         self._maxObj = maxObj
@@ -252,21 +274,27 @@ class FDSNStation(BaseResource):
         self._timeInventoryLoaded = timeInventoryLoaded.seconds()
 
         # additional object count dependent on detail level
-        self._resLevelCount = inv.responsePAZCount() + inv.responseFIRCount() \
-            + inv.responsePolynomialCount() + inv.responseIIRCount() \
+        self._resLevelCount = (
+            inv.responsePAZCount()
+            + inv.responseFIRCount()
+            + inv.responsePolynomialCount()
+            + inv.responseIIRCount()
             + inv.responseFAPCount()
+        )
         for i in range(inv.dataloggerCount()):
             self._resLevelCount += inv.datalogger(i).decimationCount()
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def render_OPTIONS(self, req):
-        req.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        req.setHeader('Access-Control-Allow-Headers',
-                      'Accept, Content-Type, X-Requested-With, Origin')
-        req.setHeader('Content-Type', 'text/plain')
+        req.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        req.setHeader(
+            "Access-Control-Allow-Headers",
+            "Accept, Content-Type, X-Requested-With, Origin",
+        )
+        req.setHeader("Content-Type", "text/plain; charset=utf-8")
         return ""
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def render_GET(self, req):
         # Parse and validate GET parameters
         ro = _StationRequestOptions()
@@ -281,7 +309,7 @@ class FDSNStation(BaseResource):
 
         return self._prepareRequest(req, ro)
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def render_POST(self, req):
         # Parse and validate POST parameters
         ro = _StationRequestOptions()
@@ -294,7 +322,7 @@ class FDSNStation(BaseResource):
 
         return self._prepareRequest(req, ro)
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def _prepareRequest(self, req, ro):
         if ro.availability and not self._daEnabled:
             msg = "including of availability information not supported"
@@ -321,17 +349,18 @@ class FDSNStation(BaseResource):
             if ro.includeRes:
                 msg = "response level output not available in text format"
                 return self.renderErrorPage(req, http.BAD_REQUEST, msg, ro)
-            req.setHeader('Content-Type', 'text/plain')
+            req.setHeader("Content-Type", "text/plain; charset=utf-8")
             d = deferToThread(self._processRequestText, req, ro, dac)
         else:
             exp = Exporter.Create(ro.Exporters[ro.format])
             if exp is None:
-                msg = "output format '%s' no available, export module '%s' " \
-                      "could not be loaded." % (
-                          ro.format, ro.Exporters[ro.format])
+                msg = (
+                    f"output format '{ro.format}' no available, export module "
+                    f"'{ro.Exporters[ro.format]}' could not be loaded."
+                )
                 return self.renderErrorPage(req, http.BAD_REQUEST, msg, ro)
 
-            req.setHeader('Content-Type', 'application/xml')
+            req.setHeader("Content-Type", "application/xml; charset=utf-8")
             exp.setFormattedOutput(bool(ro.formatted))
             d = deferToThread(self._processRequestExp, req, ro, exp, dac)
 
@@ -341,9 +370,9 @@ class FDSNStation(BaseResource):
         # The request is handled by the deferred object
         return server.NOT_DONE_YET
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def _processRequestExp(self, req, ro, exp, dac):
-        if req._disconnected: #pylint: disable=W0212
+        if req._disconnected:  # pylint: disable=W0212
             return False
 
         staCount, locCount, chaCount, extCount, objCount = 0, 0, 0, 0, 0
@@ -352,8 +381,9 @@ class FDSNStation(BaseResource):
         newInv = seiscomp.datamodel.Inventory()
         dataloggers, sensors, extents = set(), set(), {}
 
-        skipRestricted = not self._allowRestricted or \
-            (ro.restricted is not None and not ro.restricted)
+        skipRestricted = not self._allowRestricted or (
+            ro.restricted is not None and not ro.restricted
+        )
         levelNet = not ro.includeSta
         levelSta = ro.includeSta and not ro.includeCha
 
@@ -361,7 +391,7 @@ class FDSNStation(BaseResource):
 
         # iterate over inventory networks
         for net in ro.networkIter(self._inv, levelNet):
-            if req._disconnected: #pylint: disable=W0212
+            if req._disconnected:  # pylint: disable=W0212
                 return False
             if skipRestricted and utils.isRestricted(net):
                 continue
@@ -373,7 +403,7 @@ class FDSNStation(BaseResource):
 
             # iterate over inventory stations of current network
             for sta in ro.stationIter(net, levelSta):
-                if req._disconnected: #pylint: disable=W0212
+                if req._disconnected:  # pylint: disable=W0212
                     return False
                 if skipRestricted and utils.isRestricted(sta):
                     continue
@@ -381,10 +411,9 @@ class FDSNStation(BaseResource):
                     return False
 
                 if ro.includeCha:
-                    numCha, numLoc, d, s, e = \
-                        self._processStation(newNet, net, sta, ro, dac,
-                                             skipRestricted,
-                                             isConditionalRequest)
+                    numCha, numLoc, d, s, e = self._processStation(
+                        newNet, net, sta, ro, dac, skipRestricted, isConditionalRequest
+                    )
                     if numCha > 0:
                         if isConditionalRequest:
                             self.returnNotModified(req, ro)
@@ -429,24 +458,29 @@ class FDSNStation(BaseResource):
             return True
 
         if self._conditionalRequestsEnabled:
-            req.setHeader("Last-Modified",
-                          http.datetimeToString(self._timeInventoryLoaded))
+            req.setHeader(
+                "Last-Modified", http.datetimeToString(self._timeInventoryLoaded)
+            )
 
         # Copy references (dataloggers, responses, sensors)
         decCount, resCount = 0, 0
         if ro.includeCha:
-            decCount = self._copyReferences(newInv, req, objCount, self._inv,
-                                            ro, dataloggers, sensors, self._maxObj)
+            decCount = self._copyReferences(
+                newInv, req, objCount, self._inv, ro, dataloggers, sensors, self._maxObj
+            )
             if decCount is None:
                 return False
 
-            resCount = newInv.responsePAZCount() + \
-                newInv.responseFIRCount() + \
-                newInv.responsePolynomialCount() + \
-                newInv.responseFAPCount() + \
-                newInv.responseIIRCount()
-            objCount += resCount + decCount + newInv.dataloggerCount() + \
-                newInv.sensorCount()
+            resCount = (
+                newInv.responsePAZCount()
+                + newInv.responseFIRCount()
+                + newInv.responsePolynomialCount()
+                + newInv.responseFAPCount()
+                + newInv.responseIIRCount()
+            )
+            objCount += (
+                resCount + decCount + newInv.dataloggerCount() + newInv.sensorCount()
+            )
 
         # Copy data extents
         objOut = newInv
@@ -465,16 +499,15 @@ class FDSNStation(BaseResource):
             return False
 
         seiscomp.logging.debug(
-            "%s: returned %iNet, %iSta, %iLoc, %iCha, %iDL, %iDec, %iSen, "
-            "%iRes, %iDAExt (total objects/chars: %i/%i)" % (
-                ro.service, newInv.networkCount(), staCount, locCount,
-                chaCount, newInv.dataloggerCount(), decCount,
-                newInv.sensorCount(), resCount, extCount, objCount,
-                sink.written))
+            f"{ro.service}: returned {newInv.networkCount()}Net, {staCount}Sta, "
+            f"{locCount}Loc, {chaCount}Cha, {newInv.dataloggerCount()}DL, "
+            f"{decCount}Dec, {newInv.sensorCount()}Sen, {resCount}Res, {extCount}DAExt "
+            f"(total objects/bytes: {objCount}/{sink.written})"
+        )
         utils.accessLog(req, ro, http.OK, sink.written, None)
         return True
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     @staticmethod
     def _formatEpoch(obj):
         df = "%FT%T"
@@ -491,17 +524,18 @@ class FDSNStation(BaseResource):
             else:
                 end = obj.end().toString(df)
         except ValueError:
-            end = ''
+            end = ""
 
         return start, end
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def _processRequestText(self, req, ro, dac):
-        if req._disconnected: #pylint: disable=W0212
+        if req._disconnected:  # pylint: disable=W0212
             return False
 
-        skipRestricted = not self._allowRestricted or \
-            (ro.restricted is not None and not ro.restricted)
+        skipRestricted = not self._allowRestricted or (
+            ro.restricted is not None and not ro.restricted
+        )
         isConditionalRequest = self._isConditionalRequest(req)
 
         data = ""
@@ -513,7 +547,7 @@ class FDSNStation(BaseResource):
 
             # iterate over inventory networks
             for net in ro.networkIter(self._inv, True):
-                if req._disconnected: #pylint: disable=W0212
+                if req._disconnected:  # pylint: disable=W0212
                     return False
                 if skipRestricted and utils.isRestricted(net):
                     continue
@@ -521,10 +555,11 @@ class FDSNStation(BaseResource):
                 # at least one matching station is required
                 stationFound = False
                 for sta in ro.stationIter(net, False):
-                    if req._disconnected: #pylint: disable=W0212
+                    if req._disconnected:  # pylint: disable=W0212
                         return False
-                    if self._matchStation(net, sta, ro, dac) and \
-                       not (skipRestricted and utils.isRestricted(sta)):
+                    if self._matchStation(net, sta, ro, dac) and not (
+                        skipRestricted and utils.isRestricted(sta)
+                    ):
                         stationFound = True
                         break
                 if not stationFound:
@@ -534,28 +569,34 @@ class FDSNStation(BaseResource):
                     return True
 
                 start, end = self._formatEpoch(net)
-                lines.append(("%s %s" % (net.code(), start),
-                              "%s|%s|%s|%s|%i\n" % (
-                                  net.code(), net.description(), start, end,
-                                  net.stationCount())))
+                lines.append(
+                    (
+                        f"{net.code()} {start}",
+                        f"{net.code()}|{net.description()}|{start}|{end}|"
+                        f"{net.stationCount()}\n",
+                    )
+                )
 
         # level = station
         elif not ro.includeCha:
-            data = "#Network|Station|Latitude|Longitude|Elevation|" \
-                   "SiteName|StartTime|EndTime\n"
+            data = (
+                "#Network|Station|Latitude|Longitude|Elevation|"
+                "SiteName|StartTime|EndTime\n"
+            )
 
             # iterate over inventory networks
             for net in ro.networkIter(self._inv, False):
-                if req._disconnected: #pylint: disable=W0212
+                if req._disconnected:  # pylint: disable=W0212
                     return False
                 if skipRestricted and utils.isRestricted(net):
                     continue
                 # iterate over inventory stations
                 for sta in ro.stationIter(net, True):
-                    if req._disconnected: #pylint: disable=W0212
+                    if req._disconnected:  # pylint: disable=W0212
                         return False
                     if not self._matchStation(net, sta, ro, dac) or (
-                            skipRestricted and utils.isRestricted(sta)):
+                        skipRestricted and utils.isRestricted(sta)
+                    ):
                         continue
                     if isConditionalRequest:
                         self.returnNotModified(req, ro)
@@ -564,41 +605,46 @@ class FDSNStation(BaseResource):
                     try:
                         lat = str(sta.latitude())
                     except ValueError:
-                        lat = ''
+                        lat = ""
                     try:
                         lon = str(sta.longitude())
                     except ValueError:
-                        lon = ''
+                        lon = ""
                     try:
                         elev = str(sta.elevation())
                     except ValueError:
-                        elev = ''
+                        elev = ""
                     try:
                         desc = sta.description()
                     except ValueError:
-                        desc = ''
+                        desc = ""
 
                     start, end = self._formatEpoch(sta)
-                    lines.append(("%s.%s %s" % (net.code(), sta.code(), start),
-                                  "%s|%s|%s|%s|%s|%s|%s|%s\n" % (
-                                      net.code(), sta.code(), lat, lon, elev,
-                                      desc, start, end)))
+                    lines.append(
+                        (
+                            f"{net.code()}.{sta.code()} {start}",
+                            f"{net.code()}|{sta.code()}|{lat}|{lon}|{elev}|{desc}|"
+                            f"{start}|{end}\n",
+                        )
+                    )
 
         # level = channel (resonse level not supported in text format)
         else:
-            data = "#Network|Station|Location|Channel|Latitude|Longitude|" \
-                   "Elevation|Depth|Azimuth|Dip|SensorDescription|Scale|" \
-                   "ScaleFreq|ScaleUnits|SampleRate|StartTime|EndTime\n"
+            data = (
+                "#Network|Station|Location|Channel|Latitude|Longitude|"
+                "Elevation|Depth|Azimuth|Dip|SensorDescription|Scale|"
+                "ScaleFreq|ScaleUnits|SampleRate|StartTime|EndTime\n"
+            )
 
             # iterate over inventory networks
             for net in ro.networkIter(self._inv, False):
-                if req._disconnected: #pylint: disable=W0212
+                if req._disconnected:  # pylint: disable=W0212
                     return False
                 if skipRestricted and utils.isRestricted(net):
                     continue
                 # iterate over inventory stations, locations, streams
                 for sta in ro.stationIter(net, False):
-                    if req._disconnected: #pylint: disable=W0212
+                    if req._disconnected:  # pylint: disable=W0212
                         return False
                     if skipRestricted and utils.isRestricted(sta):
                         continue
@@ -613,29 +659,29 @@ class FDSNStation(BaseResource):
                             try:
                                 lat = str(loc.latitude())
                             except ValueError:
-                                lat = ''
+                                lat = ""
                             try:
                                 lon = str(loc.longitude())
                             except ValueError:
-                                lon = ''
+                                lon = ""
                             try:
                                 elev = str(loc.elevation())
                             except ValueError:
-                                elev = ''
+                                elev = ""
                             try:
                                 depth = str(stream.depth())
                             except ValueError:
-                                depth = ''
+                                depth = ""
                             try:
                                 azi = str(stream.azimuth())
                             except ValueError:
-                                azi = ''
+                                azi = ""
                             try:
                                 dip = str(stream.dip())
                             except ValueError:
-                                dip = ''
+                                dip = ""
 
-                            desc = ''
+                            desc = ""
                             try:
                                 sensor = self._inv.findSensor(stream.sensor())
                                 if sensor is not None:
@@ -646,32 +692,34 @@ class FDSNStation(BaseResource):
                             try:
                                 scale = str(stream.gain())
                             except ValueError:
-                                scale = ''
+                                scale = ""
                             try:
                                 scaleFreq = str(stream.gainFrequency())
                             except ValueError:
-                                scaleFreq = ''
+                                scaleFreq = ""
                             try:
                                 scaleUnit = str(stream.gainUnit())
                             except ValueError:
-                                scaleUnit = ''
+                                scaleUnit = ""
                             try:
-                                sr = str(stream.sampleRateNumerator() /
-                                         stream.sampleRateDenominator())
+                                sr = str(
+                                    stream.sampleRateNumerator()
+                                    / stream.sampleRateDenominator()
+                                )
                             except (ValueError, ZeroDivisionError):
-                                sr = ''
+                                sr = ""
 
                             start, end = self._formatEpoch(stream)
-                            lines.append((
-                                "%s.%s.%s.%s %s" % (
-                                    net.code(), sta.code(),
-                                    loc.code(), stream.code(), start),
-                                "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|"
-                                "%s|%s|%s|%s|%s|%s\n" % (
-                                    net.code(), sta.code(), loc.code(),
-                                    stream.code(), lat, lon, elev, depth, azi,
-                                    dip, desc, scale, scaleFreq, scaleUnit, sr,
-                                    start, end)))
+                            lines.append(
+                                (
+                                    f"{net.code()}.{sta.code()}.{loc.code()}."
+                                    f"{stream.code()} {start}",
+                                    f"{net.code()}|{sta.code()}|{loc.code()}|"
+                                    f"{stream.code()}|{lat}|{lon}|{elev}|{depth}|{azi}|"
+                                    f"{dip}|{desc}|{scale}|{scaleFreq}|{scaleUnit}|"
+                                    f"{sr}|{start}|{end}\n",
+                                )
+                            )
 
         # sort lines and append to final data string
         lines.sort(key=lambda line: line[0])
@@ -685,21 +733,24 @@ class FDSNStation(BaseResource):
             return False
 
         if self._conditionalRequestsEnabled:
-            req.setHeader("Last-Modified",
-                          http.datetimeToString(self._timeInventoryLoaded))
+            req.setHeader(
+                "Last-Modified", http.datetimeToString(self._timeInventoryLoaded)
+            )
 
-        utils.writeTS(req, data)
-        seiscomp.logging.debug("%s: returned %i lines (total bytes: %i)" % (
-            ro.service, len(lines), len(data)))
-        utils.accessLog(req, ro, http.OK, len(data), None)
+        dataBin = utils.b_str(data)
+        utils.writeTSBin(req, dataBin)
+        seiscomp.logging.debug(
+            f"{ro.service}: returned {len(lines)} lines (total bytes: {len(dataBin)})"
+        )
+        utils.accessLog(req, ro, http.OK, len(dataBin), None)
         return True
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def _isConditionalRequest(self, req):
         # support for time based conditional requests
         if not self._conditionalRequestsEnabled:
             return False
-        if req.method not in (b'GET', b'HEAD'):
+        if req.method not in (b"GET", b"HEAD"):
             return False
         if req.getHeader("If-None-Match") is not None:
             return False
@@ -711,14 +762,15 @@ class FDSNStation(BaseResource):
         modifiedSince = http.stringToDatetime(modifiedSince)
         return modifiedSince and self._timeInventoryLoaded <= modifiedSince
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     # Checks if at least one location and channel combination matches the
     # request options
     @staticmethod
     def _matchStation(net, sta, ro, dac):
         # No filter: return true immediately
-        if dac is None and \
-           (not ro.channel or (not ro.channel.loc and not ro.channel.cha)):
+        if dac is None and (
+            not ro.channel or (not ro.channel.loc and not ro.channel.cha)
+        ):
             return True
 
         for loc in ro.locationIter(net, sta, False):
@@ -730,11 +782,13 @@ class FDSNStation(BaseResource):
 
         return False
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     # Adds a deep copy of the specified station to the new network if the
     # location and channel combination matches the request options (if any)
     @staticmethod
-    def _processStation(newNet, net, sta, ro, dac, skipRestricted, isConditionalRequest):
+    def _processStation(
+        newNet, net, sta, ro, dac, skipRestricted, isConditionalRequest
+    ):
         chaCount = 0
         dataloggers, sensors, extents = set(), set(), {}
         newSta = seiscomp.datamodel.Station(sta)
@@ -763,8 +817,7 @@ class FDSNStation(BaseResource):
                 dataloggers.add(stream.datalogger())
                 sensors.add(stream.sensor())
                 if includeAvailability:
-                    ext = dac.extent(net.code(), sta.code(), loc.code(),
-                                     stream.code())
+                    ext = dac.extent(net.code(), sta.code(), loc.code(), stream.code())
                     if ext is not None and ext.publicID() not in extents:
                         extents[ext.publicID()] = ext
 
@@ -774,23 +827,22 @@ class FDSNStation(BaseResource):
 
         if newSta.sensorLocationCount() > 0:
             newNet.add(newSta)
-            return chaCount, newSta.sensorLocationCount(), dataloggers, \
-                sensors, extents
+            return chaCount, newSta.sensorLocationCount(), dataloggers, sensors, extents
 
         return 0, 0, [], [], []
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     # Copy references (data loggers, sensors, responses) depended on request
     # options
-    def _copyReferences(self, newInv, req, objCount, inv, ro, dataloggers,
-                        sensors, maxObj):
-
+    def _copyReferences(
+        self, newInv, req, objCount, inv, ro, dataloggers, sensors, maxObj
+    ):
         responses = set()
         decCount = 0
 
         # datalogger
         for i in range(inv.dataloggerCount()):
-            if req._disconnected: #pylint: disable=W0212
+            if req._disconnected:  # pylint: disable=W0212
                 return None
             logger = inv.datalogger(i)
             if logger.publicID() not in dataloggers:
@@ -806,7 +858,7 @@ class FDSNStation(BaseResource):
                     # collect response ids
                     filterStr = ""
                     try:
-                        filterStr = decimation.analogueFilterChain().content() + " "
+                        filterStr = f"{decimation.analogueFilterChain().content()} "
                     except ValueError:
                         pass
                     try:
@@ -824,7 +876,7 @@ class FDSNStation(BaseResource):
 
         # sensor
         for i in range(inv.sensorCount()):
-            if req._disconnected: #pylint: disable=W0212
+            if req._disconnected:  # pylint: disable=W0212
                 return None
             sensor = inv.sensor(i)
             if sensor.publicID() not in sensors:
@@ -847,31 +899,31 @@ class FDSNStation(BaseResource):
 
         # responses
         if ro.includeRes:
-            if req._disconnected: #pylint: disable=W0212
+            if req._disconnected:  # pylint: disable=W0212
                 return None
             for i in range(inv.responsePAZCount()):
                 resp = inv.responsePAZ(i)
                 if resp.publicID() in responses:
                     newInv.add(seiscomp.datamodel.ResponsePAZ(resp))
-            if req._disconnected: #pylint: disable=W0212
+            if req._disconnected:  # pylint: disable=W0212
                 return None
             for i in range(inv.responseFIRCount()):
                 resp = inv.responseFIR(i)
                 if resp.publicID() in responses:
                     newInv.add(seiscomp.datamodel.ResponseFIR(resp))
-            if req._disconnected: #pylint: disable=W0212
+            if req._disconnected:  # pylint: disable=W0212
                 return None
             for i in range(inv.responsePolynomialCount()):
                 resp = inv.responsePolynomial(i)
                 if resp.publicID() in responses:
                     newInv.add(seiscomp.datamodel.ResponsePolynomial(resp))
-            if req._disconnected: #pylint: disable=W0212
+            if req._disconnected:  # pylint: disable=W0212
                 return None
             for i in range(inv.responseFAPCount()):
                 resp = inv.responseFAP(i)
                 if resp.publicID() in responses:
                     newInv.add(seiscomp.datamodel.ResponseFAP(resp))
-            if req._disconnected: #pylint: disable=W0212
+            if req._disconnected:  # pylint: disable=W0212
                 return None
             for i in range(inv.responseIIRCount()):
                 resp = inv.responseIIR(i)

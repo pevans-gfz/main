@@ -47,7 +47,7 @@ void createConfigureAndAddTreeItem(QTreeWidgetItem* rootItem, const QString& tit
 
 	QTreeWidgetItem* item = new QTreeWidgetItem(rootItem, QStringList(title));
 	item->setText(column, text);
-	item->setBackgroundColor(column, backgroundColor);
+	item->setBackground(column, backgroundColor);
 }
 
 
@@ -114,8 +114,11 @@ void InfoWidget::uiInit() {
 
 	_treeWidget = new QTreeWidget(this);
 	_treeWidget->setColumnCount(2);
-	_treeWidget->adjustSize ();
-	_treeWidget->header()->hide();
+	_treeWidget->adjustSize();
+	QTreeWidgetItem* header = new QTreeWidgetItem();
+	header->setText(0, tr("Parameter"));
+	header->setText(1, tr("Value"));
+	_treeWidget->setHeaderItem(header);
 
 	_splitter = new QSplitter(Qt::Vertical);
 	_splitter->addWidget(_treeWidget);
@@ -425,8 +428,7 @@ void StationInfoWidget::uiInit() {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void StationInfoWidget::startWaveformAcquisition() {
-	Math::Filtering::InPlaceFilter<float> *filter =
-		Math::Filtering::InPlaceFilter<float>::Create(_recordFilterStr);
+	auto filter = Gui::RecordWidget::Filter::Create(_recordFilterStr);
 	if ( !filter ) {
 		SEISCOMP_ERROR("StationInfoWidget: Could not create filter for: %s", _recordFilterStr.c_str());
 		return;
@@ -610,9 +612,9 @@ void StationInfoWidget::resizeColumnsToContent() {
 
 	treeWidget()->resizeColumnToContents(0);
 
-	treeWidget()->setItemExpanded(_stationItem, isStationItemExpanded);
-	treeWidget()->setItemExpanded(_amplitudeItem, isAmplitudeItemExpanded);
-	treeWidget()->setItemExpanded(_qcItem, isQCItemExpanded);
+	_stationItem->setExpanded(isStationItemExpanded);
+	_amplitudeItem->setExpanded(isAmplitudeItemExpanded);
+	_qcItem->setExpanded(isQCItemExpanded);
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 

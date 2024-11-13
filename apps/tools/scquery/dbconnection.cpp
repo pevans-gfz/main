@@ -28,6 +28,32 @@
 #undef max
 #endif
 
+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+const std::string& escapeString(std::string &out, const std::string& str, const char delim) {
+	std::string::size_type pos = str.find(delim);
+	if ( pos == std::string::npos ) {
+		out += str;
+		return out;
+	}
+
+	if ( pos > 0 )
+		out.append(str, 0, pos);
+
+	++pos;
+	out.push_back('\\');
+	out.push_back(delim);
+	while ( pos < str.size() ) {
+		if ( str[pos] == delim )
+			out.push_back('\\');
+		out.push_back(str[pos]);
+		++pos;
+	}
+
+	return out;
+}
+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -45,14 +71,13 @@ DBConnection::~DBConnection() {}
 
 
 
-
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-bool DBConnection::executeQuery(const DBQuery& query)
+bool DBConnection::executeQuery(const DBQuery& query, bool withHeader, char delimiter)
 {
 	bool success = false;
 	if (!_db)
 		return success;
-	
+
 	if (!_table.empty())
 		_table.clear();
 
@@ -65,6 +90,9 @@ bool DBConnection::executeQuery(const DBQuery& query)
 
 	int rowFieldCount = _db->getRowFieldCount();
 	std::vector<size_t> maxRowStrLength(rowFieldCount, 0);
+	std::vector<std::string> rowHeader(rowFieldCount, "");
+	bool fetchHeader = withHeader;
+
 	while (_db->fetchRow())
 	{
 		std::vector<std::string> row(rowFieldCount, "");
@@ -73,7 +101,7 @@ bool DBConnection::executeQuery(const DBQuery& query)
 			const char* element = static_cast<const char*>(_db->getRowField(column));
 			if (element)
 			{
-				row[column] = element;
+				escapeString(row[column], element, delimiter);
 				maxRowStrLength[column] = std::max(maxRowStrLength[column], strlen(element));
 			}
 			else
@@ -81,25 +109,54 @@ bool DBConnection::executeQuery(const DBQuery& query)
 				row[column] = "NULL";
 				maxRowStrLength[column] = std::max(maxRowStrLength[column], strlen("NULL"));
 			}
+
+			if ( fetchHeader ) {
+				escapeString(rowHeader[column], _db->getRowFieldName(column), delimiter);
+				maxRowStrLength[column] = std::max(maxRowStrLength[column], rowHeader[column].size());
+			}
 		}
 		_table.push_back(row);
+		fetchHeader = false;
 	}
 	_db->endQuery();
+
 	// Convert table to string
 	std::ostringstream os;
+
+	if ( withHeader and _table.size() > 0 ) {
+		for ( int i = 0; i < rowFieldCount; ++i ) {
+			os << std::setw(maxRowStrLength[i]) << std::left << rowHeader[i];
+			if ( i < rowFieldCount - 1 ) {
+				os << " " << delimiter << " ";
+			}
+		}
+		os << std::endl;
+		/*
+		for ( int i = 0; i < rowFieldCount; ++i ) {
+			for ( size_t c = 0; c < maxRowStrLength[i]; ++c ) {
+				os << "-";
+			}
+			if ( i < rowFieldCount - 1 ) {
+				os << "-+-";
+			}
+		}
+		os << std::endl;
+		*/
+	}
+
 	for (size_t row = 0; row < _table.size(); ++row)
 	{
 		for (int column = 0; column < rowFieldCount; ++column)
 		{
 			os << std::setw(maxRowStrLength[column]) << std::left << _table[row][column];
 			if (column < rowFieldCount - 1)
-				os << " | ";
+				os << " " << delimiter << " ";
 		}
 		os << std::endl;
 	}
 	os.unsetf(std::cout.flags());
 	_tableStr = os.str();
-	
+
 	return success;
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<

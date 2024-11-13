@@ -10,10 +10,13 @@
 			</parameter>
 			<parameter name="magnitudes" type="list:string" default="MLv,mb,mB,Mwp">
 				<description>
-					List of magnitude types to be calculated when
-					computing magnitudes. This list can be altered interactively so
-					this reflects only the default unless computeMagnitudesSilently
-					is set to true.
+					List of magnitude types to be calculated when computing
+					magnitudes. This list can be altered interactively so it
+					reflects only the default unless computeMagnitudesSilently
+					is set to true. The configured types should include all
+					types which are also computed by scmag in order to allow
+					their processing in scolv. Otherwise scmag may add
+					magnitudes to origins without interaction in scolv.
 				</description>
 			</parameter>
 			<parameter name="visibleMagnitudes" type="list:string" default="M,ML,MLv,mb,mB,Mwp,Mjma,Ms_20,Ms(BB)">
@@ -167,8 +170,7 @@
 				<parameter name="systemTray" type="boolean" default="true">
 					<description>
 						Adds an icon to the system tray and displays a message
-						when a new event was received. Note that this feature
-						requires libQt4 version 4.3 or higher.
+						when a new event was received.
 					</description>
 				</parameter>
 				<group name="map">
@@ -200,6 +202,15 @@
 						</description>
 					</parameter>
 				</group>
+				<group name="arrivalPlot">
+					<parameter name="showUncertainties" type="boolean" default="true">
+						<description>
+							Whether the arrival plot should show uncertainties
+							or not by default. That flag can be toggled with 'e'
+							or via the context menu during runtime.
+						</description>
+					</parameter>
+				</group>
 				<group name="locator">
 					<parameter name="interface" type="string" default="LOCSAT">
 						<description>
@@ -218,23 +229,30 @@
 							fixed to this configured value and the origin is relocated again.
 						</description>
 					</parameter>
+					<parameter name="presetFromOrigin" type="boolean" default="false">
+						<description>
+							Whether to preset the locator settings when an origin
+							is being loaded. It tries to figure the locator type
+							from Origin.methodID and the profile from Origin.earthModelID.
+						</description>
+					</parameter>
 				</group>
 				<group name="commit">
-					<parameter name="forceEventAssociation" type="boolean" default="true">
+					<parameter name="forceEventAssociation" type="boolean" default="false">
 						<description>
 						Activates the button &quot;Force association with event&quot; when
 						committing with additional options. This is just the default
 						setting and can be changed manually when the dialog pops up.
 						</description>
 					</parameter>
-					<parameter name="fixOrigin" type="boolean" default="true">
+					<parameter name="fixOrigin" type="boolean" default="false">
 						<description>
 						Activates the button &quot;Fix this origin as preferred solution&quot; when
 						committing with additional options. This is just the default
 						setting and can be changed manually when the dialog pops up.
 						</description>
 					</parameter>
-					<parameter name="returnToEventList" type="boolean" default="true">
+					<parameter name="returnToEventList" type="boolean" default="false">
 						<description>
 						Whether to return to the event list after committing with
 						additional options or not.
@@ -247,6 +265,41 @@
 						values which may be changed if required.
 						</description>
 					</parameter>
+				</group>
+				<parameter name="originComments" type="list:string">
+					<description>
+					A list of origin comment profiles. These profiles will be
+					used to populate origin comments when committing an origin.
+					</description>
+				</parameter>
+				<group name="originComments">
+					<description>
+					The container for all origin comment profiles.
+					</description>
+					<struct name="OriginCommentProfile" link="olv.originComments">
+						<parameter name="id" type="string">
+							<description>
+							The id of the comment to be added, updated or removed.
+							</description>
+						</parameter>
+						<parameter name="label" type="string">
+							<description>
+							The label shown in the commit dialog.
+							</description>
+						</parameter>
+						<parameter name="options" type="list:string">
+							<description>
+							A list of options to select from. Actually the values
+							to populate the dropdown list with.
+							</description>
+						</parameter>
+						<parameter name="allowFreeText" type="boolean" default="false">
+							<description>
+							If free text is allowed in addition to the predefined
+							values.
+							</description>
+						</parameter>
+					</struct>
 				</group>
 				<group name="customCommits">
 					<description>
@@ -354,6 +407,41 @@
 						</parameter>
 					</struct>
 				</group>
+				<parameter name="magnitudeComments" type="list:string">
+					<description>
+					A list of magnitude comment profiles. These profiles will be
+					used to populate magnitude comments when committing a magnitude.
+					</description>
+				</parameter>
+				<group name="magnitudeComments">
+					<description>
+					The container for all magnitude comment profiles.
+					</description>
+					<struct name="MagnitudeCommentProfile" link="olv.magnitudeComments">
+						<parameter name="id" type="string">
+							<description>
+							The id of the comment to be added, updated or removed.
+							</description>
+						</parameter>
+						<parameter name="label" type="string">
+							<description>
+							The label shown in the magnitude view.
+							</description>
+						</parameter>
+						<parameter name="options" type="list:string">
+							<description>
+							A list of options to select from. Actually the values
+							to populate the dropdown list with.
+							</description>
+						</parameter>
+						<parameter name="allowFreeText" type="boolean" default="false">
+							<description>
+							If free text is allowed in addition to the predefined
+							values.
+							</description>
+						</parameter>
+					</struct>
+				</group>
 			</group>
 			<group name="picker">
 				<description>Parameters controlling the phase picker window.</description>
@@ -363,15 +451,28 @@
 						when in picking mode.
 					</description>
 				</parameter>
+				<parameter name="loadAllPicks" type="boolean" default="true">
+					<description>
+						Load all existing picks for the requested data time window.
+					</description>
+				</parameter>
 				<parameter name="ignoreUnconfiguredStations" type="boolean" default="false">
 					<description>
 						If enabled, the picker will not add stations that are not
 						configured with a detecStream in global bindings.
 					</description>
 				</parameter>
-				<parameter name="loadAllPicks" type="boolean" default="true">
+				<parameter name="limitStationAcquisition" type="boolean" default="false">
 					<description>
-						Load all existing picks for the requested data time window.
+						Limit the data acquisition to the number of nearest
+						stations given by &quot;picker.limitStationAcquisitionCount&quot;.
+					</description>
+				</parameter>
+				<parameter name="limitStationAcquisitionCount" type="int" default="10">
+					<description>
+						Limit the data acquisituion to the given number of
+						the nearest stations. Requires to activate
+						&quot;picker.limitStationAcquisition&quot;.
 					</description>
 				</parameter>
 				<parameter name="loadStrongMotion" type="boolean" default="false">
@@ -389,12 +490,13 @@
 				<parameter name="showAllComponents" type="boolean" default="false">
 					<description>
 						If enabled, all three components are shown in the picker
-						zoom trace.
+						zoom trace. The distance is limited to what is configured
+						in &quot;picker.allComponentsMaximumDistance&quot;.
 					</description>
 				</parameter>
 				<parameter name="allComponentsMaximumDistance" type="double" unit="deg" default="10">
 					<description>
-						Defines the distance limit for the showAllComponents flag.
+						The distance limit for the &quot;picker.showAllComponents&quot; flag.
 					</description>
 				</parameter>
 				<parameter name="usePerStreamTimeWindows" type="boolean" default="false">
@@ -440,12 +542,12 @@
 						side of the trace window.
 					</description>
 				</parameter>
-				<parameter name="repickerStart" type="double" unit="s" default="-10">
+				<parameter name="repickerStart" type="double" unit="s">
 					<description>
 						Start of the re-picker time window relative the cursor position on the trace.
 					</description>
 				</parameter>
-				<parameter name="repickerEnd" type="double" unit="s" default="30">
+				<parameter name="repickerEnd" type="double" unit="s">
 					<description>
 						End of the re-picker time window relative the cursor position on the trace.
 					</description>
@@ -486,14 +588,54 @@
 				</parameter>
 				<parameter name="uncertainties" type="list:string" unit="s">
 					<description>
-						List of pre-defined pick uncertainties.
-						The format of each list item is either a double value or a pair of
-						double values for asymmetric uncertainties, e.g.
-						&quot;val1&quot;,&quot;(val2,val3)&quot;.
-						This parameter is only used if &quot;picker.uncertainties.preferred&quot;
-						is undefined.
+					List of pre-defined pick uncertainties.
+					The format of each list item is either a double value or a pair of
+					double values for asymmetric uncertainties, e.g.
+					&quot;val1&quot;,&quot;(val2,val3)&quot;.
+					This parameter is only used if &quot;picker.uncertainties.preferred&quot;
+					is undefined.
 					</description>
 				</parameter>
+				<parameter name="componentFollowsMouse" type="boolean" default="false">
+					<description>
+					If enabled then the currently selected component for all traces
+					will be activated according to the mouse position in the
+					zoom trace (old behaviour). If disabled (default) then only
+					the component of the zoom trace will change but the overall
+					component will stay the same. It must be changed explicitely.
+					</description>
+				</parameter>
+				<group name="auxiliary">
+					<description>
+					Define the notion and behaviour of auxiliary channels.
+					They are identified through configurable patterns and if
+					identified as such they will be treated differently in
+					defined situations.
+					</description>
+					<parameter name="channels" type="list:string">
+						<description>
+						A list of wildcard patterns to identify auxiliary
+						channels. A pattern is simply checked against a stream
+						ID, the concatenation of NSLC separated by a period.
+						</description>
+					</parameter>
+					<parameter name="minimumDistance" type="double" unit="deg" default="0">
+						<description>
+						The minimum distance in degrees from origin to load an
+						unassociated auxiliary channel. Loading a
+						channel / station explicitely (F3) will not respect
+						this setting.
+						</description>
+					</parameter>
+					<parameter name="maximumDistance" type="double" unit="deg" default="1000">
+						<description>
+						The maximum distance in degrees from origin to load an
+						unassociated auxiliary channel. Loading a
+						channel / station explicitely (F3) will not respect
+						this setting.
+						</description>
+					</parameter>
+				</group>
 				<group name="phases">
 					<description>
 					Phases defined for picking. The phase phases can be selected
@@ -589,6 +731,34 @@
 						amplitude time window.
 					</description>
 				</parameter>
+				<parameter name="defaultNoiseBegin" type="double" unit="s" default="-30">
+					<description>
+						In case the amplitude time window cannot be computed due
+						to errors, e.g. computing travel times, this default noise
+						window start time will be used instead.
+					</description>
+				</parameter>
+				<parameter name="defaultNoiseEnd" type="double" unit="s" default="0">
+					<description>
+						In case the amplitude time window cannot be computed due
+						to errors, e.g. computing travel times, this default noise
+						window end time will be used instead.
+					</description>
+				</parameter>
+				<parameter name="defaultSignalBegin" type="double" unit="s" default="0">
+					<description>
+						In case the amplitude time window cannot be computed due
+						to errors, e.g. computing travel times, this default signal
+						window start time will be used instead.
+					</description>
+				</parameter>
+				<parameter name="defaultSignalEnd" type="double" unit="s" default="30">
+					<description>
+						In case the amplitude time window cannot be computed due
+						to errors, e.g. computing travel times, this default signal
+						window end time will be used instead.
+					</description>
+				</parameter>
 				<parameter name="filters" type="list:string">
 					<description>
 						A list of filters used for the amplitude picker. Format:
@@ -602,7 +772,9 @@
 				</description>
 				<group name="origin">
 					<description>
-						Origin information
+						Origin information to show. Event comments can be
+						processed by addons or shown in the event list as
+						configured by global parameters.
 					</description>
 					<parameter name="addons" type="list:string">
 						<description>
@@ -614,7 +786,7 @@
 					</parameter>
 					<group name="comment">
 						<description>
-						Display origin comments.
+						Origin comment value to be shown based on its comment ID.
 						</description>
 						<parameter name="id" type="string">
 							<description>
@@ -651,12 +823,14 @@
 			</group>
 		</configuration>
 		<command-line>
+			<synopsis>
+			scolv [options]
+			</synopsis>
 			<group name="Generic">
 				<optionReference>generic#help</optionReference>
 				<optionReference>generic#version</optionReference>
 				<optionReference>generic#config-file</optionReference>
 				<optionReference>generic#plugins</optionReference>
-				<optionReference>generic#daemon</optionReference>
 				<optionReference>generic#auto-shutdown</optionReference>
 				<optionReference>generic#shutdown-master-module</optionReference>
 				<optionReference>generic#shutdown-master-username</optionReference>
@@ -699,6 +873,33 @@
 				<optionReference>records#record-url</optionReference>
 				<optionReference>records#record-file</optionReference>
 				<optionReference>records#record-type</optionReference>
+			</group>
+
+			<group name="Cities">
+				<optionReference>cities#city-xml</optionReference>
+			</group>
+
+			<group name="User interface">
+				<optionReference>gui#full-screen</optionReference>
+				<optionReference>gui#non-interactive</optionReference>
+			</group>
+
+			<group name="Options">
+				<option flag="O" long-flag="origin" argument="arg">
+					<description>Preload origin with given origin ID</description>
+				</option>
+				<option flag="E" long-flag="event" argument="arg">
+					<description>Preload event with given event ID</description>
+				</option>
+				<option flag="" long-flag="offline" argument="">
+					<description>Switch to offline mode</description>
+				</option>
+				<option flag="i" long-flag="input-file" argument="xml">
+					<description>Load events in given XML file during startup and switch to offline mode</description>
+				</option>
+				<option flag="" long-flag="load-event-db" argument="arg">
+					<description>Number of days to load from database</description>
+				</option>
 			</group>
 		</command-line>
 	</module>

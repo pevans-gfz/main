@@ -30,6 +30,8 @@
 #include <seiscomp/math/mean.h>
 #include <seiscomp/seismology/ttt/locsat.h>
 
+#include <cmath>
+
 #include "amplitude.h"
 #include "regions.h"
 #include "version.h"
@@ -175,7 +177,7 @@ bool MNAmplitude::readPriorities(PhaseOrVelocity *priorities,
 		Core::split(strPriorities, settings.getString(parameter).c_str(), ", ");
 		if ( strPriorities.size() > EPhaseOrVelocityQuantity ) {
 			SEISCOMP_ERROR("%s: too many priorities, maximum is %d",
-			               parameter.c_str(), EPhaseOrVelocityQuantity);
+			               parameter.c_str(), static_cast<int>(EPhaseOrVelocityQuantity));
 			return false;
 		}
 
@@ -496,16 +498,6 @@ OPT(double) MNAmplitude::getEarliestOnset(double lat0, double lon0, double depth
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-void MNAmplitude::setHint(ProcessingHint hint, double value) {
-	// We don't care about simple hints like distance and depth. We need
-	// the full environment with origin, receiver and pick information
-}
-// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-
-
-
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void MNAmplitude::setEnvironment(const Seiscomp::DataModel::Origin *hypocenter,
                                  const Seiscomp::DataModel::SensorLocation *receiver,
                                  const Seiscomp::DataModel::Pick *pick) {
@@ -807,6 +799,8 @@ bool MNAmplitude::computeAmplitude(const Seiscomp::DoubleArray &dataArray,
 		               abs(amplitudeResponse), abs(sensorResponse), scale,
 		               amplitude->value * scale);
 	}
+
+	amplitude->value = std::abs(amplitude->value);
 
 	return true;
 }

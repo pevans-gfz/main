@@ -36,8 +36,10 @@
 #include <seiscomp/datamodel/utils.h>
 #include <seiscomp/datamodel/config_package.h>
 
+#include <seiscomp/utils/misc.h>
+
 #include <iomanip>
-#include <boost/bind.hpp>
+#include <functional>
 
 #include "picker.h"
 #include "detector.h"
@@ -222,6 +224,10 @@ void App::createCommandLineDescription() {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool App::validateParameters() {
+	if ( !StreamApplication::validateParameters() ) {
+		return false;
+	}
+
 	_config.init(commandline());
 	setMessagingEnabled(!_config.offline);
 	bool disableDB = commandline().hasOption("db-disable") ||
@@ -326,6 +332,26 @@ bool App::init() {
 	acquireComps[1] = false;
 	acquireComps[2] = false;
 
+	if ( !_config.pickerType.empty() ) {
+		PickerPtr proc = PickerFactory::Create(_config.pickerType.c_str());
+		if ( proc == NULL ) {
+			SEISCOMP_ERROR("Unknown picker: %s", _config.pickerType.c_str());
+			return false;
+		}
+
+		if ( proc->usedComponent() == WaveformProcessor::Horizontal ||
+		     proc->usedComponent() == WaveformProcessor::Any ||
+		     proc->usedComponent() == WaveformProcessor::FirstHorizontal ) {
+			acquireComps[1] = true;
+		}
+
+		if ( proc->usedComponent() == WaveformProcessor::Horizontal ||
+		     proc->usedComponent() == WaveformProcessor::Any ||
+		     proc->usedComponent() == WaveformProcessor::SecondHorizontal ) {
+			acquireComps[2] = true;
+		}
+	}
+
 	if ( !_config.secondaryPickerType.empty() ) {
 		SecondaryPickerPtr proc = SecondaryPickerFactory::Create(_config.secondaryPickerType.c_str());
 		if ( proc == NULL ) {
@@ -402,9 +428,10 @@ bool App::init() {
 	Core::Time now = Core::Time::GMT();
 	DataModel::Inventory *inv = Client::Inventory::Instance()->inventory();
 
+	StringSet subscribeStreams;
+
 	for ( StationConfig::const_iterator it = _stationConfig.begin();
 	      it != _stationConfig.end(); ++it ) {
-
 		// Ignore wildcards
 		if ( it->first.first == "*" ) continue;
 		if ( it->first.second == "*" ) continue;
@@ -415,7 +442,7 @@ bool App::init() {
 		// Ignore disabled channels
 		if ( !it->second.enabled ) {
 			SEISCOMP_INFO("Detector on station %s.%s disabled by config",
-			              it->first.first.c_str(), it->first.second.c_str());
+			              it->first.first, it->first.second);
 			continue;
 		}
 
@@ -447,28 +474,38 @@ bool App::init() {
 		SEISCOMP_INFO("Adding detection channel %s", streamID.c_str());
 
 		_streamIDs.insert(streamID);
+		subscribeStreams.insert(streamID);
 
 		recordStream()->addStream(it->first.first, it->first.second, it->second.locationCode, channel);
 
 		if ( compZ && acquireComps[0] ) {
 			streamID = it->first.first + "." + it->first.second + "." + it->second.locationCode + "." + compZ->code();
-			if ( _streamIDs.find(streamID) == _streamIDs.end() )
+			if ( subscribeStreams.find(streamID) == subscribeStreams.end() ) {
+				SEISCOMP_DEBUG("Adding data channel %s", streamID.c_str());
 				recordStream()->addStream(it->first.first, it->first.second, it->second.locationCode, compZ->code());
+				subscribeStreams.insert(streamID);
+			}
 		}
 
 		if ( compN && acquireComps[1] ) {
 			streamID = it->first.first + "." + it->first.second + "." + it->second.locationCode + "." + compN->code();
-			if ( _streamIDs.find(streamID) == _streamIDs.end() )
+			if ( subscribeStreams.find(streamID) == subscribeStreams.end() ) {
+				SEISCOMP_DEBUG("Adding data channel %s", streamID.c_str());
 				recordStream()->addStream(it->first.first, it->first.second, it->second.locationCode, compN->code());
+				subscribeStreams.insert(streamID);
+			}
 		}
 
 		if ( compE && acquireComps[2] ) {
 			streamID = it->first.first + "." + it->first.second + "." + it->second.locationCode + "." + compE->code();
-			if ( _streamIDs.find(streamID) == _streamIDs.end() )
+			if ( subscribeStreams.find(streamID) == subscribeStreams.end() ) {
+				SEISCOMP_DEBUG("Adding data channel %s", streamID.c_str());
 				recordStream()->addStream(it->first.first, it->first.second, it->second.locationCode, compE->code());
+				subscribeStreams.insert(streamID);
+			}
 		}
 
-		if ( _config.playback ) {
+		if ( _config.playback && inv ) {
 			// Figure out all historic epochs for locations and channels and
 			// subscribe to all channels covering all epochs. This is only
 			// required in playback mode if historic data is fed into the picker
@@ -491,8 +528,11 @@ bool App::init() {
 
 							if ( it->second.channel.compare(0, 2, cha->code(), 0, 2) == 0 ) {
 								streamID = it->first.first + "." + it->first.second + "." + it->second.locationCode + "." + cha->code();
-								if ( _streamIDs.find(streamID) == _streamIDs.end() )
+								if ( subscribeStreams.find(streamID) == subscribeStreams.end() ) {
+									SEISCOMP_DEBUG("Adding data channel %s", streamID.c_str());
 									recordStream()->addStream(it->first.first, it->first.second, it->second.locationCode, cha->code());
+									subscribeStreams.insert(streamID);
+								}
 							}
 						}
 					}
@@ -511,7 +551,7 @@ bool App::init() {
 		}
 	}
 	else
-		SEISCOMP_INFO("%d stations added", (int)_streamIDs.size());
+		SEISCOMP_INFO("%d channels added", (int)_streamIDs.size());
 
 	SEISCOMP_INFO("\nAmplitudes to calculate:\n%s", logAmplTypes.c_str());
 
@@ -806,7 +846,7 @@ bool App::initProcessor(Processing::WaveformProcessor *proc,
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool App::initDetector(const string &streamID,
                        const DataModel::WaveformStreamID &waveformID,
-                       const Core::Time &time) {
+                       const Record *rec) {
 	double trigOn = _config.defaultTriggerOnThreshold;
 	double trigOff = _config.defaultTriggerOffThreshold;
 	double tcorr = _config.defaultTimeCorrection;
@@ -850,18 +890,28 @@ bool App::initDetector(const string &streamID,
 	detector->setGapTolerance(_config.maxGapLength);
 	detector->setGapInterpolationEnabled(_config.interpolateGaps);
 	detector->setSensitivityCorrection(sensitivityCorrection);
-	detector->setPublishFunction(boost::bind(&App::emitDetection, this, _1, _2, _3));
+	detector->setPublishFunction(bind(
+		&App::emitDetection, this,
+		placeholders::_1,
+		placeholders::_2,
+		placeholders::_3
+	));
 
 	if ( _config.calculateAmplitudes )
-		detector->setAmplitudePublishFunction(boost::bind(&App::emitAmplitude, this, _1, _2));
+		detector->setAmplitudePublishFunction(bind(
+			&App::emitAmplitude, this,
+			placeholders::_1, placeholders::_2
+		));
 
 	if ( !initProcessor(detector.get(), detector->usedComponent(),
-	                    time, streamID, waveformID, sensitivityCorrection) )
+	                    rec->startTime(), streamID, waveformID, sensitivityCorrection) )
 		return false;
 
-	SEISCOMP_DEBUG("%s: created detector", streamID.c_str());
+	SEISCOMP_DEBUG("%s: created detector with filter %s",
+	               streamID.c_str(), filter.c_str());
 
 	addProcessor(waveformID, detector.get());
+	detector->feed(rec);
 
 //	SEISCOMP_DEBUG("Number of processors: %lu", (unsigned long)processorCount());
 
@@ -874,12 +924,77 @@ bool App::initDetector(const string &streamID,
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void App::handleNewStream(const Record *rec) {
-	if ( _config.useAllStreams || _streamIDs.find(rec->streamID()) != _streamIDs.end() )
-		if ( !initDetector(rec->streamID(), waveformStreamID(rec), rec->startTime()) ) {
+	if ( _config.useAllStreams || _streamIDs.find(rec->streamID()) != _streamIDs.end() ) {
+		if ( !initDetector(rec->streamID(), waveformStreamID(rec), rec) ) {
 			SEISCOMP_ERROR("%s: initialization failed: abort operation",
 			               rec->streamID().c_str());
 			exit(1);
 		}
+	}
+}
+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
+
+
+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+template <typename T>
+void App::pushProcessor(const std::string &networkCode,
+                        const std::string &stationCode,
+                        const std::string &locationCode,
+                        T *proc) {
+	switch ( proc->usedComponent() ) {
+		case Processing::WaveformProcessor::Vertical:
+			addProcessor(networkCode,
+			             stationCode,
+			             locationCode,
+			             proc->streamConfig(Processing::WaveformProcessor::VerticalComponent).code(),
+			             proc);
+			break;
+		case Processing::WaveformProcessor::FirstHorizontal:
+			addProcessor(networkCode,
+			             stationCode,
+			             locationCode,
+			             proc->streamConfig(Processing::WaveformProcessor::FirstHorizontalComponent).code(),
+			             proc);
+			break;
+		case Processing::WaveformProcessor::SecondHorizontal:
+			addProcessor(networkCode,
+			             stationCode,
+			             locationCode,
+			             proc->streamConfig(Processing::WaveformProcessor::SecondHorizontalComponent).code(),
+			             proc);
+			break;
+		case Processing::WaveformProcessor::Horizontal:
+			addProcessor(networkCode,
+			             stationCode,
+			             locationCode,
+			             proc->streamConfig(Processing::WaveformProcessor::FirstHorizontalComponent).code(),
+			             proc);
+			addProcessor(networkCode,
+			             stationCode,
+			             locationCode,
+			             proc->streamConfig(Processing::WaveformProcessor::SecondHorizontalComponent).code(),
+			             proc);
+			break;
+		case Processing::WaveformProcessor::Any:
+			addProcessor(networkCode,
+			             stationCode,
+			             locationCode,
+			             proc->streamConfig(Processing::WaveformProcessor::VerticalComponent).code(),
+			             proc);
+			addProcessor(networkCode,
+			             stationCode,
+			             locationCode,
+			             proc->streamConfig(Processing::WaveformProcessor::FirstHorizontalComponent).code(),
+			             proc);
+			addProcessor(networkCode,
+			             stationCode,
+			             locationCode,
+			             proc->streamConfig(Processing::WaveformProcessor::SecondHorizontalComponent).code(),
+			             proc);
+			break;
+	}
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -948,15 +1063,13 @@ bool App::addFeatureExtractor(Seiscomp::DataModel::Pick *pick,
 		),
 		pick
 	);
-	proc->setPublishFunction(
-		boost::bind(
-			&App::emitFXPick, this,
-			Seiscomp::DataModel::PickPtr(pick),
-			Seiscomp::DataModel::AmplitudePtr(amp),
-			isPrimary,
-			_1, _2
-		)
-	);
+	proc->setPublishFunction(std::bind(
+		&App::emitFXPick, this,
+		Seiscomp::DataModel::PickPtr(pick),
+		Seiscomp::DataModel::AmplitudePtr(amp),
+		isPrimary,
+		placeholders::_1, placeholders::_2
+	));
 
 	const DataModel::WaveformStreamID waveformID(waveformStreamID(rec));
 	const std::string &n = rec->networkCode();
@@ -971,34 +1084,7 @@ bool App::addFeatureExtractor(Seiscomp::DataModel::Pick *pick,
 	               rec->streamID().c_str(), _config.featureExtractionType.c_str(),
 	               rec->referenceCount());
 
-	switch ( proc->usedComponent() ) {
-		case Processing::WaveformProcessor::Vertical:
-			c = proc->streamConfig(Processing::WaveformProcessor::VerticalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-		case Processing::WaveformProcessor::FirstHorizontal:
-			c = proc->streamConfig(Processing::WaveformProcessor::FirstHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-		case Processing::WaveformProcessor::SecondHorizontal:
-			c = proc->streamConfig(Processing::WaveformProcessor::SecondHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-		case Processing::WaveformProcessor::Horizontal:
-			c = proc->streamConfig(Processing::WaveformProcessor::FirstHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			c = proc->streamConfig(Processing::WaveformProcessor::SecondHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-		case Processing::WaveformProcessor::Any:
-			c = proc->streamConfig(Processing::WaveformProcessor::VerticalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			c = proc->streamConfig(Processing::WaveformProcessor::FirstHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			c = proc->streamConfig(Processing::WaveformProcessor::SecondHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-	}
+	pushProcessor(n, s, l, proc.get());
 
 	return true;
 }
@@ -1020,7 +1106,7 @@ void App::addSecondaryPicker(const Core::Time &onset, const Record *rec, const s
 	SecondaryPicker::Trigger trigger;
 	trigger.onset = onset;
 	proc->setTrigger(trigger);
-	proc->setPublishFunction(boost::bind(&App::emitSPick, this, _1, _2));
+	proc->setPublishFunction(bind(&App::emitSPick, this, placeholders::_1, placeholders::_2));
 	proc->setReferencingPickID(pickID);
 
 	const DataModel::WaveformStreamID waveformID(waveformStreamID(rec));
@@ -1036,34 +1122,7 @@ void App::addSecondaryPicker(const Core::Time &onset, const Record *rec, const s
 	               rec->streamID().c_str(), _config.secondaryPickerType.c_str(),
 	               rec->referenceCount());
 
-	switch ( proc->usedComponent() ) {
-		case Processing::WaveformProcessor::Vertical:
-			c = proc->streamConfig(Processing::WaveformProcessor::VerticalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-		case Processing::WaveformProcessor::FirstHorizontal:
-			c = proc->streamConfig(Processing::WaveformProcessor::FirstHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-		case Processing::WaveformProcessor::SecondHorizontal:
-			c = proc->streamConfig(Processing::WaveformProcessor::SecondHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-		case Processing::WaveformProcessor::Horizontal:
-			c = proc->streamConfig(Processing::WaveformProcessor::FirstHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			c = proc->streamConfig(Processing::WaveformProcessor::SecondHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-		case Processing::WaveformProcessor::Any:
-			c = proc->streamConfig(Processing::WaveformProcessor::VerticalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			c = proc->streamConfig(Processing::WaveformProcessor::FirstHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			c = proc->streamConfig(Processing::WaveformProcessor::SecondHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-	}
+	pushProcessor(n, s, l, proc.get());
 
 	ProcList &list = _runningStreamProcs[rec->streamID()];
 	if ( _config.killPendingSecondaryProcessors ) {
@@ -1128,7 +1187,7 @@ void App::addSecondaryPicker(const Core::Time &onset, const Record *rec, const s
 void App::addAmplitudeProcessor(AmplitudeProcessorPtr proc,
                                 const Record *rec,
                                 const Seiscomp::DataModel::Pick *pick) {
-	proc->setPublishFunction(boost::bind(&App::emitAmplitude, this, _1, _2));
+	proc->setPublishFunction(bind(&App::emitAmplitude, this, placeholders::_1, placeholders::_2));
 	proc->setReferencingPickID(pick->publicID());
 
 	const DataModel::WaveformStreamID waveformID(waveformStreamID(rec));
@@ -1160,34 +1219,7 @@ void App::addAmplitudeProcessor(AmplitudeProcessorPtr proc,
 	else
 		proc->setUpdateEnabled(false);
 
-	switch ( proc->usedComponent() ) {
-		case Processing::WaveformProcessor::Vertical:
-			c = proc->streamConfig(Processing::WaveformProcessor::VerticalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-		case Processing::WaveformProcessor::FirstHorizontal:
-			c = proc->streamConfig(Processing::WaveformProcessor::FirstHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-		case Processing::WaveformProcessor::SecondHorizontal:
-			c = proc->streamConfig(Processing::WaveformProcessor::SecondHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-		case Processing::WaveformProcessor::Horizontal:
-			c = proc->streamConfig(Processing::WaveformProcessor::FirstHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			c = proc->streamConfig(Processing::WaveformProcessor::SecondHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-		case Processing::WaveformProcessor::Any:
-			c = proc->streamConfig(Processing::WaveformProcessor::VerticalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			c = proc->streamConfig(Processing::WaveformProcessor::FirstHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			c = proc->streamConfig(Processing::WaveformProcessor::SecondHorizontalComponent).code();
-			addProcessor(n, s, l, c, proc.get());
-			break;
-	}
+	pushProcessor(n, s, l, proc.get());
 
 //	SEISCOMP_DEBUG("Number of processors: %lu", (unsigned long)processorCount());
 }
@@ -1206,8 +1238,7 @@ void App::emitTrigger(const Processing::Detector *pickProc,
 	}
 
 	proc->setTrigger(time);
-	proc->setMargin(60.);
-	proc->setPublishFunction(boost::bind(&App::emitPPick, this, _1, _2));
+	proc->setPublishFunction(bind(&App::emitPPick, this, placeholders::_1, placeholders::_2, static_cast<const Detector*>(pickProc)->duration()));
 
 	const DataModel::WaveformStreamID waveformID(waveformStreamID(rec));
 
@@ -1217,7 +1248,8 @@ void App::emitTrigger(const Processing::Detector *pickProc,
 	SEISCOMP_DEBUG("%s: created picker %s",
 	               rec->streamID().c_str(), _config.pickerType.c_str());
 
-	addProcessor(waveformID, proc.get());
+	pushProcessor(waveformID.networkCode(), waveformID.stationCode(),
+	              waveformID.locationCode(), proc.get());
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -1226,7 +1258,8 @@ void App::emitTrigger(const Processing::Detector *pickProc,
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void App::emitPPick(const Processing::Picker *proc,
-                    const Processing::Picker::Result &res)
+                    const Processing::Picker::Result &res,
+                    double duration)
 {
 	PickMap::iterator it = _lastPicks.find(res.record->streamID());
 	if ( it != _lastPicks.end() ) {
@@ -1303,13 +1336,39 @@ void App::emitPPick(const Processing::Picker *proc,
 
 	if ( _config.extraPickComments && res.snr >= 0 ) {
 		DataModel::CommentPtr comment;
+
+		if ( duration >= 0 ) {
+			comment = new DataModel::Comment;
+			comment->setId("duration");
+			comment->setText(Core::toString(duration));
+			pick->add(comment.get());
+		}
+
 		comment = new DataModel::Comment;
 		comment->setId("SNR");
 		comment->setText(Core::toString(res.snr));
 		pick->add(comment.get());
 	}
 
-	SEISCOMP_DEBUG("Created P pick %s", pick->publicID().c_str());
+	if ( !_config.commentID.empty() && !_config.commentText.empty() ) {
+		DataModel::CommentPtr comment;
+		comment = new DataModel::Comment;
+		comment->setId(_config.commentID);
+		comment->setText(_config.commentText);
+		pick->add(comment.get());
+	}
+
+	proc->finalizePick(pick.get());
+
+	string phaseHintCode;
+	try {
+		phaseHintCode = pick->phaseHint().code();
+	}
+	catch ( ... ) {}
+
+	bool isPrimary = Util::getShortPhaseName(phaseHintCode) == Util::getShortPhaseName(_config.phaseHint);
+
+	SEISCOMP_DEBUG("Created %s'%s' pick %s", isPrimary ? "primary ":"", phaseHintCode, pick->publicID());
 
 	_lastPicks[res.record->streamID()] = pick;
 
@@ -1336,14 +1395,15 @@ void App::emitPPick(const Processing::Picker *proc,
 		amp->setSnr(res.snr);
 		amp->setAmplitude(DataModel::RealQuantity(res.snr));
 
-		SEISCOMP_DEBUG("Created %s amplitude %s", amp->type().c_str(), amp->publicID().c_str());
-		SEISCOMP_DEBUG("  pickID   %s", amp->pickID().c_str());
+		SEISCOMP_DEBUG("Created %s amplitude %s", amp->type(), amp->publicID());
+		SEISCOMP_DEBUG("  pickID   %s", amp->pickID());
 	}
 
-	if ( _config.featureExtractionType.empty()
-	  || !addFeatureExtractor(pick.get(), amp.get(), res.record, true) ) {
-		sendPick(pick.get(), amp.get(), res.record, true);
-		SEISCOMP_DEBUG("%s: emit P pick %s", res.record->streamID().c_str(), pick->publicID().c_str());
+	if ( _config.featureExtractionType.empty() || !isPrimary
+	  || !addFeatureExtractor(pick.get(), amp.get(), res.record, isPrimary) ) {
+		sendPick(pick.get(), amp.get(), res.record, isPrimary);
+		SEISCOMP_DEBUG("%s: emit %s pick %s", res.record->streamID(),
+		               phaseHintCode, pick->publicID());
 	}
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -1449,6 +1509,13 @@ void App::emitDetection(const Processing::Detector *proc, const Record *rec, con
 	pick->setCreationInfo(ci);
 	pick->setTime(time);
 	pick->setMethodID(proc->methodID());
+	if ( !_config.commentID.empty() && !_config.commentText.empty() ) {
+		DataModel::CommentPtr comment;
+		comment = new DataModel::Comment;
+		comment->setId(_config.commentID);
+		comment->setText(_config.commentText);
+		pick->add(comment.get());
+	}
 
 	// Set filterID
 	string filter = _config.defaultFilter;
@@ -1468,6 +1535,15 @@ void App::emitDetection(const Processing::Detector *proc, const Record *rec, con
 	}
 	pick->setPhaseHint(DataModel::Phase(_config.phaseHint));
 	pick->setWaveformID(waveformStreamID(rec));
+
+	if ( _config.extraPickComments ) {
+		if ( static_cast<const Detector*>(proc)->duration() >= 0 ) {
+			auto comment = new DataModel::Comment;
+			comment->setId("duration");
+			comment->setText(Core::toString(static_cast<const Detector*>(proc)->duration()));
+			pick->add(comment);
+		}
+	}
 
 	SEISCOMP_DEBUG("Created detection %s", pick->publicID().c_str());
 

@@ -12,8 +12,9 @@
  ***************************************************************************/
 
 
-#ifndef SEISCOMP_QC_QCPLUGINOFFSET_H__
-#define SEISCOMP_QC_QCPLUGINOFFSET_H__
+#ifndef SEISCOMP_QC_QCPLUGINOFFSET_H
+#define SEISCOMP_QC_QCPLUGINOFFSET_H
+
 
 #include <seiscomp/plugins/qc/qcplugin.h>
 
@@ -24,19 +25,17 @@ namespace Qc {
 
 
 DEFINE_SMARTPOINTER(QcPluginOffset);
-
 class QcPluginOffset : public QcPlugin {
-    DECLARE_SC_CLASS(QcPluginOffset);
+	DECLARE_SC_CLASS(QcPluginOffset);
 
-public:
-    QcPluginOffset();
-    std::string registeredName() const;
-    std::vector<std::string> parameterNames() const;
+	public:
+		QcPluginOffset();
 };
 
 
+}
+}
+}
 
-}
-}
-}
+
 #endif

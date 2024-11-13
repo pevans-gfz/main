@@ -26,9 +26,9 @@
 #include <boost/any.hpp>
 #include <boost/signals2.hpp>
 
-#include <string> 
-#include <set> 
-#include <map> 
+#include <string>
+#include <set>
+#include <map>
 
 
 namespace bsig = boost::signals2;
@@ -44,27 +44,30 @@ DEFINE_SMARTPOINTER(QcBuffer);
 
 class QcTool : public QcApp, public bsig::trackable {
 	public:
+		using TimerSignal = bsig::signal<void()>;
+
+	public:
 		QcTool(int argc, char **argv);
 		~QcTool();
 
-		QcMessenger* qcMessenger() const;
-		bool exitRequested() const;
+		QcMessenger* qcMessenger() const override;
+		bool exitRequested() const override;
 
-		typedef bsig::signal<void()> TimerSignal;
-		void addTimeout(const TimerSignal::slot_type& onTimeout) const;
-		bool archiveMode() const;
-		std::string creatorID() const;
+		void addTimeout(const TimerSignal::slot_type& onTimeout) const override;
+		bool archiveMode() const override;
+		std::string creatorID() const override;
 
 
 	protected:
-		void createCommandLineDescription();
-		bool validateParameters();
-		bool initConfiguration();
+		void createCommandLineDescription() override;
+		bool validateParameters() override;
+		bool initConfiguration() override;
 
-		bool init();
-		void done();
+		bool init() override;
+		void done() override;
 
-		void handleTimeout();
+		void handleTimeout() override;
+		void handleNewStream(const Record* rec) override;
 
 	private:
 		void addStream(std::string net, std::string sta, std::string loc, std::string cha);
@@ -74,10 +77,8 @@ class QcTool : public QcApp, public bsig::trackable {
 		            const std::string& stationCode,
 		            const std::string& locationCode,
 		            const std::string& channelCode);
-		
-		void handleNewStream(const Record* rec);
-		
-		void processorFinished(const Record* rec, Processing::WaveformProcessor* wp);
+
+		void processorFinished(const Record* rec, Processing::WaveformProcessor* wp) override;
 
 
 	private:
@@ -95,15 +96,15 @@ class QcTool : public QcApp, public bsig::trackable {
 		int _dbLookBack;
 		std::map<std::string, QcConfigPtr> _plugins;
 		std::set<std::string> _allParameterNames;
-	
+
 		double _maxGapLength;
 		double _ringBufferSize;
 		double _leadTime;
-		
-		QcMessenger* _qcMessenger;
+
+		QcMessengerPtr _qcMessenger;
 
 		//! maps streamID's and associated qcPlugins
-		typedef std::multimap<const std::string, QcPluginCPtr> QcPluginMap;
+		using QcPluginMap = std::multimap<const std::string, QcPluginCPtr>;
 		QcPluginMap _qcPluginMap;
 
 		mutable TimerSignal _emitTimeout;

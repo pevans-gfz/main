@@ -14,7 +14,9 @@
 ############################################################################
 
 import sys
-import seiscomp.core, seiscomp.client, seiscomp.datamodel
+import seiscomp.core
+import seiscomp.client
+import seiscomp.datamodel
 
 
 class SendJournal(seiscomp.client.Application):
@@ -24,16 +26,43 @@ class SendJournal(seiscomp.client.Application):
         self.setMessagingEnabled(True)
         self.setMessagingUsername("")
         self.setPrimaryMessagingGroup("EVENT")
+        self.params = None
+        self.filename = None
+
+    def createCommandLineDescription(self):
+        self.commandline().addGroup("Input")
+        self.commandline().addStringOption(
+            "Input",
+            "input,i",
+            "Read parameters from given file instead of command line.",
+        )
 
     def init(self):
-        if not seiscomp.client.Application.init(self):
+        if seiscomp.client.Application.init(self) == False:
             return False
-        self.params = self.commandline().unrecognizedOptions()
-        if len(self.params) < 2:
-            sys.stderr.write(
-                self.name() + " [opts] {objectID} {action} [parameters]\n")
-            return False
+
         return True
+
+    def printUsage(self):
+
+        print(
+            """Usage:
+  scsendjournal [options] {objectID} {action} [parameters]
+
+Send journaling information to the messaging to manipulate SeisComP objects like events and origins."""
+        )
+
+        seiscomp.client.Application.printUsage(self)
+
+        print(
+            """Examples:
+Set the type of the event with ID gempa2021abcd to 'earthquake'
+  scsendjournal -H localhost gempa2021abcd EvType "earthquake"
+
+Set the type of the event with ID gempa2021abcd and read the type from file
+  scsendjournal -H localhost gempa2021abcd EvType -i input.txt
+"""
+        )
 
     def run(self):
         msg = seiscomp.datamodel.NotifierMessage()
@@ -44,16 +73,46 @@ class SendJournal(seiscomp.client.Application):
         entry.setSender(self.author())
         entry.setAction(self.params[1])
 
-        sys.stderr.write(
-            "Sending entry (" + entry.objectID() + "," + entry.action() + ")\n")
+        print(
+            f"Sending entry ({entry.objectID()},{entry.action()})",
+            file=sys.stderr,
+        )
 
-        if len(self.params) > 2:
+        if self.filename:
+            try:
+                with open(self.filename, "r") as f:
+                    entry.setParameters(f.read().rstrip())
+            except Exception as err:
+                print(f"{str(err)}", file=sys.stderr)
+                return False
+
+        elif len(self.params) > 2:
             entry.setParameters(self.params[2])
 
         n = seiscomp.datamodel.Notifier(
-            seiscomp.datamodel.Journaling.ClassName(), seiscomp.datamodel.OP_ADD, entry)
+            seiscomp.datamodel.Journaling.ClassName(), seiscomp.datamodel.OP_ADD, entry
+        )
         msg.attach(n)
         self.connection().send(msg)
+
+        return True
+
+    def validateParameters(self):
+        if seiscomp.client.Application.validateParameters(self) == False:
+            return False
+
+        try:
+            self.filename = self.commandline().optionString("input")
+        except RuntimeError:
+            pass
+
+        self.params = self.commandline().unrecognizedOptions()
+        if len(self.params) < 2:
+            print(
+                f"{self.name()} [opts] {{objectID}} {{action}} [parameters]",
+                file=sys.stderr,
+            )
+            return False
 
         return True
 

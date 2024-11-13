@@ -14,7 +14,7 @@
 #define SEISCOMP_COMPONENT STAXML
 
 #include "convert2fdsnxml.h"
-#include "convert2sc3.h"
+#include "convert2sc.h"
 
 #include <fdsnxml/xml.h>
 #include <fdsnxml/fdsnstationxml.h>
@@ -58,6 +58,7 @@ class SyncStationXML : public Client::Application {
 			setMessagingEnabled(false);
 			setDatabaseEnabled(false, false);
 			setLoggingToStdErr(true);
+			setDaemonEnabled(false);
 
 			_convertBack = false;
 			_activeConverter = NULL;
@@ -78,16 +79,21 @@ class SyncStationXML : public Client::Application {
 			commandline().addGroup("Convert");
 
 			commandline().addOption("Convert", "relaxed-ns-check",
-			                        "Enable relaxed XML namespace checks. This will "
-			                        "accept also tags within a different namespace than "
-			                        "defined in the supported schema.");
+			                        "Enable relaxed XML namespace checks. This "
+			                        "will accept also tags within a different "
+			                        "namespace than defined in the supported "
+			                        "schema.");
 			commandline().addOption("Convert", "to-staxml",
-			                        "Convert from SeisComPML to StationXML expecting SeisComPML as input");
+			                        "Convert from SeisComPML to StationXML "
+			                        "expecting SeisComPML as input.");
 			commandline().addOption("Convert", "formatted,f",
-			                        "Enable formatted output");
+			                        "Enable formatted XML output.");
 			commandline().addOption("Convert", "log-stages",
-			                        "Add more output to stderr for all channel response stages when converting "
-			                        "from StationXML");
+			                        "Add more output to stderr for all channel "
+			                        "response stages when converting from "
+			                        "StationXML.");
+			commandline().addOption("Convert", "only-instruments",
+			                        "Convert only instruments and ignore networks.");
 		}
 
 		bool validateParameters() {
@@ -99,11 +105,27 @@ class SyncStationXML : public Client::Application {
 			if ( commandline().hasOption("to-staxml") )
 				_convertBack = true;
 
+			if ( commandline().hasOption("only-instruments") ) {
+				if ( _convertBack ) {
+					cout << "--only-instruments is not supported in combination with --to-staxml" << endl;
+					return false;
+				}
+				_onlyInstruments = true;
+			}
+
 			const vector<string> &args = commandline().unrecognizedOptions();
 			if ( args.size() < 1 ) {
-				cerr << "Usage: fdsnxml2inv [options] input [output=stdout]" << endl;
+				cout << "Must provide exactly one input file" << endl;
+				printUsage();
 				return false;
 			}
+			if ( args.size() > 2 ) {
+				cout << "You must provide exactly one input and you may provide "
+				        "one output file" << endl;
+				printUsage();
+				return false;
+			}
+
 
 			_inputFile = args[0];
 
@@ -115,6 +137,22 @@ class SyncStationXML : public Client::Application {
 			return true;
 		}
 
+		void printUsage() const {
+			cout << "Usage:"  << endl << "  fdsnxml2inv [options] input [output=stdout]"
+			     << endl << endl
+			     << "Convert station inventory between FDSN StationXML format "
+			        "and SeisComP XML." << endl;
+
+			Seiscomp::Client::Application::printUsage();
+
+			cout << "Examples:" << endl;
+			cout << "Convert FDSN StationXML to SCML" << endl
+			     << "  fdsnxml2inv fdsn-station.xml inventory.xml" << endl;
+			cout  << endl << "Convert SCML to FDSN StationXML" << endl
+			     << "  fdsnxml2inv --to-staxml inventory.xml fdsn-station.xml" << endl;
+		}
+
+
 		void exit(int returnCode) {
 			Client::Application::exit(returnCode);
 
@@ -122,7 +160,7 @@ class SyncStationXML : public Client::Application {
 				_activeConverter->interrupt();
 		}
 
-		bool convertToSC3() {
+		bool convertToSC() {
 			DataModel::InventoryPtr inv;
 
 			inv = Client::Inventory::Instance()->inventory();
@@ -132,12 +170,14 @@ class SyncStationXML : public Client::Application {
 				inv = new DataModel::Inventory;
 			}
 
-			Convert2SC3 cnv(inv.get());
+			Convert2SC cnv(inv.get());
 			cnv.setLogStages(commandline().hasOption("log-stages"));
 
 			_activeConverter = &cnv;
 
-			if ( _exitRequested ) return false;
+			if ( _exitRequested ) {
+				return false;
+			}
 
 			FDSNXML::Importer imp;
 			imp.setStrictNamespaceCheck(_strictNsCheck);
@@ -167,6 +207,12 @@ class SyncStationXML : public Client::Application {
 			if ( _exitRequested ) {
 				cerr << "Exit requested" << endl;
 				return false;
+			}
+
+			if ( _onlyInstruments ) {
+				while ( inv->networkCount() > 0 ) {
+					inv->removeNetwork(0);
+				}
 			}
 
 			cerr << "Finished processing" << endl;
@@ -244,7 +290,7 @@ class SyncStationXML : public Client::Application {
 			if ( _convertBack )
 				return convertToStaXML();
 			else
-				return convertToSC3();
+				return convertToSC();
 		}
 
 
@@ -254,6 +300,7 @@ class SyncStationXML : public Client::Application {
 		string     _inputFile;
 		string     _outputFile;
 		bool       _strictNsCheck;
+		bool       _onlyInstruments{false};
 };
 
 

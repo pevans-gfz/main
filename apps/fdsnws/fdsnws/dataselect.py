@@ -14,10 +14,10 @@
 # Email:   herrnkind@gempa.de
 ################################################################################
 
-from __future__ import absolute_import, division, print_function
-
-import sys
 import time
+
+from io import BytesIO
+
 import dateutil.parser
 
 from twisted.cred import portal
@@ -26,12 +26,11 @@ from twisted.internet import interfaces, reactor
 
 from zope.interface import implementer
 
-import seiscomp.logging
+from seiscomp import logging, mseedlite
+
 from seiscomp.client import Application
 from seiscomp.core import Array, Record, Time
 from seiscomp.io import RecordInput, RecordStream
-
-from seiscomp import mseedlite
 
 from .http import HTTP, BaseResource
 from .request import RequestOptions
@@ -40,41 +39,35 @@ from . import utils
 from .reqtrack import RequestTrackerDB
 from .fastsds import SDS
 
-if sys.version_info[0] < 3:
-    from cStringIO import StringIO as BytesIO
-else:
-    from io import BytesIO
-
-VERSION = "1.1.1"
+VERSION = "1.1.3"
 
 ################################################################################
 
 
 class _DataSelectRequestOptions(RequestOptions):
-
     MinTime = Time(0, 1)
 
-    PQuality = ['quality']
-    PMinimumLength = ['minimumlength']
-    PLongestOnly = ['longestonly']
+    PQuality = ["quality"]
+    PMinimumLength = ["minimumlength"]
+    PLongestOnly = ["longestonly"]
 
-    QualityValues = ['B', 'D', 'M', 'Q', 'R']
-    OutputFormats = ['miniseed', 'mseed']
+    QualityValues = ["B", "D", "M", "Q", "R"]
+    OutputFormats = ["miniseed", "mseed"]
 
-    POSTParams = RequestOptions.POSTParams + \
-        PQuality + PMinimumLength + PLongestOnly
+    POSTParams = RequestOptions.POSTParams + PQuality + PMinimumLength + PLongestOnly
     GETParams = RequestOptions.GETParams + POSTParams
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def __init__(self):
-        RequestOptions.__init__(self)
-        self.service = 'fdsnws-dataselect'
+        super().__init__()
+
+        self.service = "fdsnws-dataselect"
 
         self.quality = self.QualityValues[0]
         self.minimumLength = None
         self.longestOnly = None
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def _checkTimes(self, realtimeGap):
         maxEndTime = Time(self.accessTime)
         if realtimeGap is not None:
@@ -93,7 +86,7 @@ class _DataSelectRequestOptions(RequestOptions):
         # remove items with start time >= end time
         self.streams = [x for x in self.streams if x.time.start < x.time.end]
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def parse(self):
         # quality (optional), currently not supported
         key, value = self.getFirstValue(self.PQuality)
@@ -117,7 +110,7 @@ class _DataSelectRequestOptions(RequestOptions):
 
 
 ################################################################################
-class _MyRecordStream(object):
+class _MyRecordStream:
     def __init__(self, url, trackerList, bufferSize):
         self.__url = url
         self.__trackerList = trackerList
@@ -125,8 +118,7 @@ class _MyRecordStream(object):
         self.__tw = []
 
     def addStream(self, net, sta, loc, cha, startt, endt, restricted, archNet):
-        self.__tw.append((net, sta, loc, cha, startt,
-                          endt, restricted, archNet))
+        self.__tw.append((net, sta, loc, cha, startt, endt, restricted, archNet))
 
     @staticmethod
     def __override_network(data, net):
@@ -145,27 +137,27 @@ class _MyRecordStream(object):
         return out.getvalue()
 
     def input(self):
-        fastsdsPrefix = 'fastsds://'
+        fastsdsPrefix = "fastsds://"
 
         if self.__url.startswith(fastsdsPrefix):
-            fastsds = SDS(self.__url[len(fastsdsPrefix):])
+            fastsds = SDS(self.__url[len(fastsdsPrefix) :])
 
         else:
             fastsds = None
 
-        for (net, sta, loc, cha, startt, endt, restricted, archNet) in self.__tw:
+        for net, sta, loc, cha, startt, endt, restricted, archNet in self.__tw:
             if not archNet:
                 archNet = net
 
             size = 0
 
             if fastsds:
-                start = dateutil.parser.parse(
-                    startt.iso()).replace(tzinfo=None)
+                start = dateutil.parser.parse(startt.iso()).replace(tzinfo=None)
                 end = dateutil.parser.parse(endt.iso()).replace(tzinfo=None)
 
-                for data in fastsds.getRawBytes(start, end, archNet, sta, loc,
-                                                cha, self.__bufferSize):
+                for data in fastsds.getRawBytes(
+                    start, end, archNet, sta, loc, cha, self.__bufferSize
+                ):
                     size += len(data)
 
                     if archNet == net:
@@ -176,14 +168,13 @@ class _MyRecordStream(object):
                             yield self.__override_network(data, net)
 
                         except Exception as e:
-                            seiscomp.logging.error(
-                                "could not override network code: %s" % str(e))
+                            logging.error(f"could not override network code: {e}")
 
             else:
                 rs = RecordStream.Open(self.__url)
 
                 if rs is None:
-                    seiscomp.logging.error("could not open record stream")
+                    logging.error("could not open record stream")
                     break
 
                 rs.addStream(archNet, sta, loc, cha, startt, endt)
@@ -198,7 +189,7 @@ class _MyRecordStream(object):
                             rec = rsInput.next()
 
                         except Exception as e:
-                            seiscomp.logging.error("%s" % str(e))
+                            logging.error(str(e))
                             eof = True
                             break
 
@@ -219,27 +210,51 @@ class _MyRecordStream(object):
                                 yield self.__override_network(data, net)
 
                             except Exception as e:
-                                seiscomp.logging.error("could not override network " \
-                                              "code: %s" % str(e))
+                                logging.error(f"could not override network code: {e}")
 
             for tracker in self.__trackerList:
-                net_class = 't' if net[0] in "0123456789XYZ" else 'p'
+                net_class = "t" if net[0] in "0123456789XYZ" else "p"
 
                 if size == 0:
-                    tracker.line_status(startt, endt, net, sta, cha, loc,
-                                        restricted, net_class, True, [],
-                                        "fdsnws", "NODATA", 0, "")
+                    tracker.line_status(
+                        startt,
+                        endt,
+                        net,
+                        sta,
+                        cha,
+                        loc,
+                        restricted,
+                        net_class,
+                        True,
+                        [],
+                        "fdsnws",
+                        "NODATA",
+                        0,
+                        "",
+                    )
 
                 else:
-                    tracker.line_status(startt, endt, net, sta, cha, loc,
-                                        restricted, net_class, True, [],
-                                        "fdsnws", "OK", size, "")
+                    tracker.line_status(
+                        startt,
+                        endt,
+                        net,
+                        sta,
+                        cha,
+                        loc,
+                        restricted,
+                        net_class,
+                        True,
+                        [],
+                        "fdsnws",
+                        "OK",
+                        size,
+                        "",
+                    )
 
 
 ################################################################################
 @implementer(interfaces.IPushProducer)
-class _WaveformProducer(object):
-
+class _WaveformProducer:
     def __init__(self, req, ro, rs, fileName, trackerList):
         self.req = req
         self.ro = ro
@@ -264,9 +279,10 @@ class _WaveformProducer(object):
             self.running = False
 
         if self.written == 0:
-            self.req.setHeader('Content-Type', 'application/vnd.fdsn.mseed')
-            self.req.setHeader('Content-Disposition', "attachment; "
-                               "filename=%s" % self.fileName)
+            self.req.setHeader("Content-Type", "application/vnd.fdsn.mseed")
+            self.req.setHeader(
+                "Content-Disposition", f"attachment; filename={self.fileName}"
+            )
 
         self.req.write(data)
         self.written += len(data)
@@ -277,8 +293,9 @@ class _WaveformProducer(object):
 
         if self.written == 0:
             msg = "no waveform data found"
-            errorpage = HTTP.renderErrorPage(self.req, http.NO_CONTENT, msg,
-                                             VERSION, self.ro)
+            errorpage = HTTP.renderErrorPage(
+                self.req, http.NO_CONTENT, msg, VERSION, self.ro
+            )
 
             if errorpage:
                 self.req.write(errorpage)
@@ -288,8 +305,9 @@ class _WaveformProducer(object):
                 tracker.request_status("END", "")
 
         else:
-            seiscomp.logging.debug("%s: returned %i bytes of mseed data" % (
-                self.ro.service, self.written))
+            logging.debug(
+                f"{self.ro.service}: returned {self.written} bytes of mseed data"
+            )
             utils.accessLog(self.req, self.ro, http.OK, self.written, None)
 
             for tracker in self.trackerList:
@@ -319,11 +337,11 @@ class _WaveformProducer(object):
     def stopProducing(self):
         self.stopped = True
 
-        seiscomp.logging.debug(
-            "%s: returned %i bytes of mseed data (not completed)" % (
-                self.ro.service, self.written))
-        utils.accessLog(self.req, self.ro, http.OK,
-                        self.written, "not completed")
+        logging.debug(
+            f"{self.ro.service}: returned {self.written} bytes of mseed data (not "
+            "completed)"
+        )
+        utils.accessLog(self.req, self.ro, http.OK, self.written, "not completed")
 
         for tracker in self.trackerList:
             tracker.volume_status("fdsnws", "ERROR", self.written, "")
@@ -335,43 +353,53 @@ class _WaveformProducer(object):
 
 ################################################################################
 @implementer(portal.IRealm)
-class FDSNDataSelectRealm(object):
-
-    #---------------------------------------------------------------------------
+class FDSNDataSelectRealm:
+    # ---------------------------------------------------------------------------
     def __init__(self, inv, bufferSize, access):
         self.__inv = inv
         self.__bufferSize = bufferSize
         self.__access = access
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def requestAvatar(self, avatarId, _mind, *interfaces_):
         if resource.IResource in interfaces_:
-            return (resource.IResource,
-                    FDSNDataSelect(self.__inv, self.__bufferSize, self.__access,
-                                   {"mail": utils.py3ustr(avatarId), "blacklisted": False}),
-                    lambda: None)
+            return (
+                resource.IResource,
+                FDSNDataSelect(
+                    self.__inv,
+                    self.__bufferSize,
+                    self.__access,
+                    {"mail": utils.u_str(avatarId), "blacklisted": False},
+                ),
+                lambda: None,
+            )
 
         raise NotImplementedError()
 
 
 ################################################################################
 @implementer(portal.IRealm)
-class FDSNDataSelectAuthRealm(object):
-
-    #---------------------------------------------------------------------------
+class FDSNDataSelectAuthRealm:
+    # ---------------------------------------------------------------------------
     def __init__(self, inv, bufferSize, access, userdb):
         self.__inv = inv
         self.__bufferSize = bufferSize
         self.__access = access
         self.__userdb = userdb
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def requestAvatar(self, avatarId, _mind, *interfaces_):
         if resource.IResource in interfaces_:
-            return (resource.IResource,
-                    FDSNDataSelect(self.__inv, self.__bufferSize, self.__access,
-                                   self.__userdb.getAttributes(avatarId)),
-                    lambda: None)
+            return (
+                resource.IResource,
+                FDSNDataSelect(
+                    self.__inv,
+                    self.__bufferSize,
+                    self.__access,
+                    self.__userdb.getAttributes(utils.u_str(avatarId)),
+                ),
+                lambda: None,
+            )
 
         raise NotImplementedError()
 
@@ -380,54 +408,57 @@ class FDSNDataSelectAuthRealm(object):
 class FDSNDataSelect(BaseResource):
     isLeaf = True
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def __init__(self, inv, bufferSize, access=None, user=None):
-        BaseResource.__init__(self, VERSION)
+        super().__init__(VERSION)
+
         self._rsURL = Application.Instance().recordStreamURL()
         self.__inv = inv
         self.__access = access
         self.__user = user
         self.__bufferSize = bufferSize
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def render_OPTIONS(self, req):
-        req.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        req.setHeader('Access-Control-Allow-Headers',
-                      'Accept, Content-Type, X-Requested-With, Origin')
-        req.setHeader('Content-Type', 'text/plain')
+        req.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        req.setHeader(
+            "Access-Control-Allow-Headers",
+            "Accept, Content-Type, X-Requested-With, Origin",
+        )
+        req.setHeader("Content-Type", "text/plain; charset=utf-8")
         return ""
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def render_GET(self, req):
         # Parse and validate GET parameters
         ro = _DataSelectRequestOptions()
-        ro.userName = self.__user and self.__user.get('mail')
+        ro.userName = self.__user and self.__user.get("mail")
         try:
             ro.parseGET(req.args)
             ro.parse()
             # the GET operation supports exactly one stream filter
             ro.streams.append(ro)
         except ValueError as e:
-            seiscomp.logging.warning(str(e))
+            logging.warning(str(e))
             return self.renderErrorPage(req, http.BAD_REQUEST, str(e), ro)
 
         return self._processRequest(req, ro)
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def render_POST(self, req):
         # Parse and validate POST parameters
         ro = _DataSelectRequestOptions()
-        ro.userName = self.__user and self.__user.get('mail')
+        ro.userName = self.__user and self.__user.get("mail")
         try:
             ro.parsePOST(req.content)
             ro.parse()
         except ValueError as e:
-            seiscomp.logging.warning(str(e))
+            logging.warning(str(e))
             return self.renderErrorPage(req, http.BAD_REQUEST, str(e), ro)
 
         return self._processRequest(req, ro)
 
-    #-----------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     def _networkIter(self, ro):
         for i in range(self.__inv.networkCount()):
             net = self.__inv.network(i)
@@ -447,7 +478,7 @@ class FDSNDataSelect(BaseResource):
 
             yield net
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     @staticmethod
     def _stationIter(net, ro):
         for i in range(net.stationCount()):
@@ -468,7 +499,7 @@ class FDSNDataSelect(BaseResource):
 
             yield sta
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     @staticmethod
     def _locationIter(sta, ro):
         for i in range(sta.sensorLocationCount()):
@@ -489,7 +520,7 @@ class FDSNDataSelect(BaseResource):
 
             yield loc
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     @staticmethod
     def _streamIter(loc, ro):
         for i in range(loc.streamCount()):
@@ -528,11 +559,11 @@ class FDSNDataSelect(BaseResource):
 
             yield stream, True
 
-    #---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def _processRequest(self, req, ro):
-        #pylint: disable=W0212
+        # pylint: disable=W0212
 
-        if ro.quality != 'B' and ro.quality != 'M':
+        if ro.quality not in ("B", "M"):
             msg = "quality other than 'B' or 'M' not supported"
             return self.renderErrorPage(req, http.BAD_REQUEST, msg, ro)
 
@@ -573,17 +604,23 @@ class FDSNDataSelect(BaseResource):
             else:
                 userID = app._trackdbDefaultUser
 
-            reqID = 'ws' + str(int(round(time.time() * 1000) - 1420070400000))
-            tracker = RequestTrackerDB(clientID, app.connection(), reqID,
-                                       "WAVEFORM", userID,
-                                       "REQUEST WAVEFORM " + reqID,
-                                       "fdsnws", userIP, req.getClientIP())
+            reqID = f"ws{str(int(round(time.time() * 1000) - 1420070400000))}"
+            tracker = RequestTrackerDB(
+                clientID,
+                app.connection(),
+                reqID,
+                "WAVEFORM",
+                userID,
+                f"REQUEST WAVEFORM {reqID}",
+                "fdsnws",
+                userIP,
+                req.getClientIP(),
+            )
 
             trackerList.append(tracker)
 
         if app._requestLog:
-            tracker = app._requestLog.tracker(
-                ro.service, ro.userName, userIP, clientID)
+            tracker = app._requestLog.tracker(ro.service, ro.userName, userIP, clientID)
             trackerList.append(tracker)
 
         # Open record stream
@@ -600,11 +637,13 @@ class FDSNDataSelect(BaseResource):
                 if not trackerList and netRestricted and not self.__user:
                     forbidden = forbidden or (forbidden is None)
                     continue
+
                 for sta in self._stationIter(net, s):
                     staRestricted = utils.isRestricted(sta)
                     if not trackerList and staRestricted and not self.__user:
                         forbidden = forbidden or (forbidden is None)
                         continue
+
                     for loc in self._locationIter(sta, s):
                         for cha, aux in self._streamIter(loc, s):
                             start_time = max(cha.start(), s.time.start)
@@ -614,21 +653,46 @@ class FDSNDataSelect(BaseResource):
                             except ValueError:
                                 end_time = s.time.end
 
-                            if (netRestricted or staRestricted or utils.isRestricted(cha)) and (
-                                    not self.__user or (
-                                        self.__access and not self.__access.authorize(
-                                            self.__user, net.code(), sta.code(),
-                                            loc.code(), cha.code(),
-                                            start_time, end_time))):
-
+                            streamRestricted = (
+                                netRestricted
+                                or staRestricted
+                                or utils.isRestricted(cha)
+                            )
+                            if streamRestricted and (
+                                not self.__user
+                                or (
+                                    self.__access
+                                    and not self.__access.authorize(
+                                        self.__user,
+                                        net.code(),
+                                        sta.code(),
+                                        loc.code(),
+                                        cha.code(),
+                                        start_time,
+                                        end_time,
+                                    )
+                                )
+                            ):
                                 for tracker in trackerList:
-                                    net_class = 't' if net.code()[0] \
-                                        in "0123456789XYZ" else 'p'
+                                    net_class = (
+                                        "t" if net.code()[0] in "0123456789XYZ" else "p"
+                                    )
                                     tracker.line_status(
-                                        start_time, end_time, net.code(),
-                                        sta.code(), cha.code(), loc.code(),
-                                        True, net_class, True, [], "fdsnws",
-                                        "DENIED", 0, "")
+                                        start_time,
+                                        end_time,
+                                        net.code(),
+                                        sta.code(),
+                                        cha.code(),
+                                        loc.code(),
+                                        True,
+                                        net_class,
+                                        True,
+                                        [],
+                                        "fdsnws",
+                                        "DENIED",
+                                        0,
+                                        "",
+                                    )
 
                                 forbidden = forbidden or (forbidden is None)
                                 continue
@@ -648,11 +712,11 @@ class FDSNDataSelect(BaseResource):
                                     n = cha.sampleRateNumerator()
                                     d = cha.sampleRateDenominator()
                                 except ValueError:
-                                    msg = "skipping stream without sampling " \
-                                          "rate definition: %s.%s.%s.%s" % (
-                                              net.code(), sta.code(),
-                                              loc.code(), cha.code())
-                                    seiscomp.logging.warning(msg)
+                                    logging.warning(
+                                        "skipping stream without sampling rate "
+                                        f"definition: {net.code()}.{sta.code()}."
+                                        f"{loc.code()}.{cha.code()}"
+                                    )
                                     continue
 
                                 # calculate number of samples for requested
@@ -660,19 +724,28 @@ class FDSNDataSelect(BaseResource):
                                 diffSec = (end_time - start_time).length()
                                 samples += int(diffSec * n / d)
                                 if samples > maxSamples:
-                                    msg = "maximum number of %sM samples " \
-                                          "exceeded" % str(app._samplesM)
+                                    msg = (
+                                        f"maximum number of {app._samplesM}M samples "
+                                        "exceeded"
+                                    )
                                     return self.renderErrorPage(
-                                        req, http.REQUEST_ENTITY_TOO_LARGE, msg, ro)
+                                        req, http.REQUEST_ENTITY_TOO_LARGE, msg, ro
+                                    )
 
-                            seiscomp.logging.debug(
-                                "adding stream: %s.%s.%s.%s %s - %s" % (
-                                    net.code(), sta.code(), loc.code(),
-                                    cha.code(), start_time.iso(), end_time.iso()))
+                            logging.debug(
+                                f"adding stream: {net.code()}.{sta.code()}.{loc.code()}"
+                                f".{cha.code()} {start_time.iso()} - {end_time.iso()}"
+                            )
                             rs.addStream(
-                                net.code(), sta.code(), loc.code(), cha.code(),
-                                start_time, end_time, utils.isRestricted(cha),
-                                sta.archiveNetworkCode())
+                                net.code(),
+                                sta.code(),
+                                loc.code(),
+                                cha.code(),
+                                start_time,
+                                end_time,
+                                utils.isRestricted(cha),
+                                sta.archiveNetworkCode(),
+                            )
 
         if forbidden:
             for tracker in trackerList:
@@ -691,16 +764,24 @@ class FDSNDataSelect(BaseResource):
             return self.renderErrorPage(req, http.NO_CONTENT, msg, ro)
 
         if auxStreamsFound:
-            seiscomp.logging.info(
-                "the request contains at least one auxillary stream which " \
-                "are deprecated{}".format(
-                    "" if maxSamples is None else \
-                    " and whose samples are not included in the maximum " \
-                    " sample per request limit"))
+            msg = (
+                "the request contains at least one auxiliary stream which are "
+                "deprecated"
+            )
+            if maxSamples is not None:
+                msg += (
+                    " and whose samples are not included in the maximum sample per "
+                    "request limit"
+                )
+            logging.info(msg)
 
         # Build output filename
-        fileName = Application.Instance()._fileNamePrefix.replace(
-            "%time", time.strftime('%Y-%m-%dT%H:%M:%S')) + '.mseed'
+        fileName = (
+            Application.Instance()._fileNamePrefix.replace(
+                "%time", time.strftime("%Y-%m-%dT%H:%M:%S")
+            )
+            + ".mseed"
+        )
 
         # Create producer for async IO
         prod = _WaveformProducer(req, ro, rs, fileName, trackerList)

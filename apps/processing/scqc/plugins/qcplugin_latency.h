@@ -12,8 +12,9 @@
  ***************************************************************************/
 
 
-#ifndef SEISCOMP_QC_QCLATENCY_H__
-#define SEISCOMP_QC_QCLATENCY_H__
+#ifndef SEISCOMP_QC_QCLATENCY_H
+#define SEISCOMP_QC_QCLATENCY_H
+
 
 #include <seiscomp/plugins/qc/qcplugin.h>
 
@@ -24,23 +25,23 @@ namespace Qc {
 
 
 DEFINE_SMARTPOINTER(QcPluginLatency);
-
 class QcPluginLatency : public QcPlugin {
-    DECLARE_SC_CLASS(QcPluginLatency);
+	DECLARE_SC_CLASS(QcPluginLatency);
 
-public:
-    QcPluginLatency();
-    std::string registeredName() const;
-    std::vector<std::string> parameterNames() const;
-	
-private:
-    Core::Time _lastArrivalTime;
-    void timeoutTask();
+	public:
+		QcPluginLatency();
+
+	public:
+		void timeoutTask() override;
+
+	private:
+		Core::Time _lastArrivalTime;
 };
 
 
+}
+}
+}
 
-}
-}
-}
+
 #endif

@@ -15,8 +15,8 @@
 
 
 
-#ifndef __QCVIEW_H__
-#define __QCVIEW_H__
+#ifndef QCVIEW_H
+#define QCVIEW_H
 
 #include <string>
 
@@ -42,7 +42,8 @@ class QcView : public QWidget {
 	Q_OBJECT
 
 	public:
-		QcView(QcModel* qcModel, QWidget* parent=0, Qt::WindowFlags f=0);
+		QcView(QcModel *qcModel, QString name=QString(),
+		       QWidget *parent=nullptr, Qt::WindowFlags f=Qt::WindowFlags());
 
 		~QcView();
 
@@ -63,6 +64,7 @@ class QcView : public QWidget {
 
 	protected:
 		QcModel                        *_qcModel;
+		QString                         _name;
 		QSortFilterProxyModel          *_qcProxyModel;
 		QVBoxLayout                    *_layout;
 		QHBoxLayout                    *_layout2;
@@ -70,7 +72,6 @@ class QcView : public QWidget {
 		QLabel                         *_lbVSecCount;
 		QLineEdit                      *_leFilter;
 		QLabel                         *_lbLeFilter;
-		QWidget                        *_parent;
 
 		std::string                     _recordStreamURL;
 		const DataModel::DatabaseQuery *_dbQuery;
@@ -86,7 +87,9 @@ class QcTableView : public QcView {
 	Q_OBJECT
 
 	public:
-		QcTableView(QcModel* qcModel, QWidget* parent=0, Qt::WindowFlags f=0);
+		QcTableView(QcModel *qcModel, QString name=QString(),
+		            QWidget *parent=nullptr,
+		            Qt::WindowFlags f=Qt::WindowFlags());
 
 		~QcTableView();
 		void init();
@@ -96,8 +99,6 @@ class QcTableView : public QcView {
 		bool eventFilter(QObject* o, QEvent* e);
 
 	public slots:
-		void resetTableSorting();
-		void alterCornerButton();
 		void showStream(int);
 		double streamWidgetLength() const;
 		void setStreamWidgetLength(double length);
@@ -106,8 +107,7 @@ class QcTableView : public QcView {
 
 
 	private:
-		QTableView* _qcTable;
-		QAbstractButton* _cornerButton;
+		QTableView *_qcTable;
 		double _streamWidgetLength;
 
 };
@@ -121,7 +121,9 @@ class QcOverView : public QcView {
 	Q_OBJECT
 
 	public:
-		QcOverView(QcModel* qcModel, QWidget* parent=0, Qt::WindowFlags f=0);
+		QcOverView(QcModel *qcModel, QString name=QString(),
+		           QWidget *parent=nullptr,
+		           Qt::WindowFlags f=Qt::WindowFlags());
 		~QcOverView();
 		void init();
 

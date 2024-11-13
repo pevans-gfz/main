@@ -14,17 +14,22 @@
 ############################################################################
 
 import sys
-import seiscomp.client, seiscomp.datamodel
+import os
+import seiscomp.client
+import seiscomp.datamodel
 import seiscomp.config
+import seiscomp.system
 
 
 def readParams(sc_params):
     if sc_params.baseID():
-        sc_params_base = seiscomp.datamodel.ParameterSet.Find(
-            sc_params.baseID())
+        sc_params_base = seiscomp.datamodel.ParameterSet.Find(sc_params.baseID())
         if sc_params_base is None:
-            sys.stderr.write("Warning: %s: base parameter set for %s not found\n" % (
-                sc_params.baseID(), sc_params.publicID()))
+            print(
+                f"Warning: {sc_params.baseID()}: base parameter set for "
+                f"{sc_params.publicID()} not found",
+                file=sys.stderr,
+            )
             params = {}
         else:
             params = readParams(sc_params_base)
@@ -41,14 +46,15 @@ def readParams(sc_params):
 class DumpCfg(seiscomp.client.Application):
     def __init__(self, argc, argv):
         if argc < 2:
-            sys.stderr.write("scdumpcfg {modname} [options]\n")
+            print("scdumpcfg {modname} [options]", file=sys.stderr)
             raise RuntimeError
 
         self.appName = argv[1]
+        self.config = seiscomp.config.Config()
 
         # Remove first parameter to replace appname with passed module name
-        argc = argc-1
-        argv = argv[1:]
+        # argc = argc - 1
+        # argv = argv[1:]
 
         seiscomp.client.Application.__init__(self, argc, argv)
 
@@ -58,15 +64,38 @@ class DumpCfg(seiscomp.client.Application):
         self.setLoadConfigModuleEnabled(True)
         self.setDaemonEnabled(False)
 
+        self.dumpBindings = False
+        self.allowGlobal = False
+        self.formatCfg = False
+        self.nslc = False
+        self.param = None
+
     def createCommandLineDescription(self):
         self.commandline().addGroup("Dump")
-        self.commandline().addStringOption("Dump", "param,P",
-                                           "Specify parameter name to filter for")
-        self.commandline().addOption("Dump", "bindings,B",
-                                     "Dump bindings instead of module configuration")
-        self.commandline().addOption("Dump", "allow-global,G",
-                                     "Print global bindings if no module binding is avaible")
-        self.commandline().addOption("Dump", "cfg", "Print output in .cfg format")
+        self.commandline().addOption(
+            "Dump", "bindings,B", "Dump bindings instead of module configuration."
+        )
+        self.commandline().addOption(
+            "Dump",
+            "allow-global,G",
+            "Print global bindings if no module binding is avaible.",
+        )
+        self.commandline().addStringOption(
+            "Dump",
+            "param,P",
+            "Specify the parameter name(s) to filter for. Use comma sepration for "
+            "multiple parameters.",
+        )
+        self.commandline().addOption(
+            "Dump", "cfg", "Print output in .cfg format. Does not work along with -B."
+        )
+        self.commandline().addOption(
+            "Dump",
+            "nslc",
+            "Print the list of channels which have bindings of the given module. "
+            "Requires to set -B. Can be used by other modules, e.g., invextr, scart, "
+            "scmssort, scevtstreams.",
+        )
 
     def validateParameters(self):
         if not seiscomp.client.Application.validateParameters(self):
@@ -75,12 +104,18 @@ class DumpCfg(seiscomp.client.Application):
         self.dumpBindings = self.commandline().hasOption("bindings")
 
         try:
-            self.param = self.commandline().optionString("param")
-        except:
-            self.param = None
+            param = self.commandline().optionString("param")
+            self.param = param.split(",")
+        except RuntimeError:
+            pass
 
         self.allowGlobal = self.commandline().hasOption("allow-global")
         self.formatCfg = self.commandline().hasOption("cfg")
+        self.nslc = self.commandline().hasOption("nslc")
+
+        if self.dumpBindings and self.databaseURI() != "":
+            self.setMessagingEnabled(False)
+            self.setDatabaseEnabled(True, False)
 
         if not self.dumpBindings:
             self.setMessagingEnabled(False)
@@ -90,46 +125,91 @@ class DumpCfg(seiscomp.client.Application):
         return True
 
     def initConfiguration(self):
-        if self.appName == "-h" or self.appName == "--help":
+        if self.appName in ("-h", "--help"):
             self.printUsage()
             return False
 
-        return seiscomp.client.Application.initConfiguration(self)
+        if not seiscomp.client.Application.initConfiguration(self):
+            return False
 
-    # Do nothing.
-    def initSubscriptions(self):
+        seiscomp.system.Environment.Instance().initConfig(self.config, self.appName)
+
         return True
 
+    def initSubscriptions(self):
+        # Do nothing.
+        return True
+
+    def printUsage(self):
+        print(
+            f"""Usage:
+  {os.path.basename(__file__)} [options]
+
+Dump bindings or module configurations used by a specific module or global for \
+particular stations.""",
+            file=sys.stderr,
+        )
+
+        seiscomp.client.Application.printUsage(self)
+
+        print(
+            f"""Examples:
+Dump scautopick bindings configuration including global for all stations
+  {os.path.basename(__file__)} scautopick -d localhost -BG
+
+Connect to messaging for the database connection and dump scautopick bindings \
+configuration including global for all stations
+  {os.path.basename(__file__)} scautopick -H localhost -BG
+
+Dump scautopick module configuration including global parameters
+  {os.path.basename(__file__)} scautopick --cfg
+
+Dump global bindings configuration considerd by scmv
+  {os.path.basename(__file__)} scmv -d localhost -BG
+
+Dump the list of streams configured with scautopick bindings
+  {os.path.basename(__file__)} scautopick -d localhost -B --nslc
+
+Dump specific parameters configured with scautopick bindings
+  {os.path.basename(__file__)} scautopick -B -d localhost \
+-P spicker.AIC.minSNR,spicker.AIC.minCnt
+""",
+            file=sys.stderr,
+        )
+
     def run(self):
-        cfg = self.configuration()
+        cfg = self.config
+        if self.nslc:
+            nslc = set()
 
         if not self.dumpBindings:
             symtab = cfg.symbolTable()
             names = cfg.names()
             count = 0
             for name in names:
-                if self.param and self.param != name:
+                if self.param and name not in self.param:
                     continue
+
                 sym = symtab.get(name)
                 if self.formatCfg:
                     if sym.comment:
                         if count > 0:
-                            sys.stdout.write("\n")
-                        sys.stdout.write("%s\n" % sym.comment)
-                    sys.stdout.write("%s = %s\n" % (sym.name, sym.content))
+                            print("")
+                        print(f"{sym.comment}")
+                    print(f"{cfg.escapeIdentifier(sym.name)} = {sym.content}")
                 else:
-                    sys.stdout.write("%s\n" % sym.name)
-                    sys.stdout.write("  value(s) : %s\n" %
-                                     ", ".join(sym.values))
-                    sys.stdout.write("  source   : %s\n" % sym.uri)
+                    print(f"{sym.name}")
+                    print(f"  value(s) : {', '.join(sym.values)}")
+                    print(f"  source   : {sym.uri}")
+
                 count = count + 1
 
             if self.param and count == 0:
-                sys.stderr.write("%s: definition not found\n." % self.param)
+                print(f"{self.param}: definition not found", file=sys.stderr)
         else:
             cfg = self.configModule()
             if cfg is None:
-                sys.stderr.write("No config module read\n")
+                print("No config module read", file=sys.stderr)
                 return False
 
             tmp = {}
@@ -137,7 +217,7 @@ class DumpCfg(seiscomp.client.Application):
                 cfg_sta = cfg.configStation(i)
                 tmp[(cfg_sta.networkCode(), cfg_sta.stationCode())] = cfg_sta
 
-            name = self.name()
+            name = self.appName
             # For backward compatibility rename global to default
             if name == "global":
                 name = "default"
@@ -146,7 +226,9 @@ class DumpCfg(seiscomp.client.Application):
                 cfg_sta = tmp[item]
                 sta_enabled = cfg_sta.enabled()
                 cfg_setup = seiscomp.datamodel.findSetup(
-                    cfg_sta, name, self.allowGlobal)
+                    cfg_sta, name, self.allowGlobal
+                )
+
                 if not cfg_setup is None:
                     suffix = ""
                     if sta_enabled and cfg_setup.enabled():
@@ -161,32 +243,50 @@ class DumpCfg(seiscomp.client.Application):
                             suffix += "setup disabled"
                         suffix += ")"
                         out = "- "
-                    out += "%s.%s%s\n" % (cfg_sta.networkCode(),
-                                          cfg_sta.stationCode(), suffix)
+                    out += f"{cfg_sta.networkCode()}.{cfg_sta.stationCode()}{suffix}\n"
                     params = seiscomp.datamodel.ParameterSet.Find(
-                        cfg_setup.parameterSetID())
+                        cfg_setup.parameterSetID()
+                    )
                     if params is None:
-                        sys.stderr.write(
-                            "ERROR: %s: ParameterSet not found\n" % cfg_setup.parameterSetID())
+                        print(
+                            f"ERROR: {cfg_setup.parameterSetID()}: ParameterSet not found",
+                            file=sys.stderr,
+                        )
                         return False
 
                     params = readParams(params)
+                    if self.nslc:
+                        try:
+                            sensorLocation = params["detecLocid"]
+                        except KeyError:
+                            sensorLocation = ""
+                        try:
+                            detecStream = params["detecStream"]
+                        except KeyError:
+                            detecStream = ""
+
+                        stream = f"{cfg_sta.networkCode()}.{cfg_sta.stationCode()}.{sensorLocation}.{detecStream}"
+                        nslc.add(stream)
                     count = 0
                     for param_name in sorted(params.keys()):
-                        if self.param and self.param != param_name:
+                        if self.param and param_name not in self.param:
                             continue
-                        out += "  %s: %s\n" % (param_name, params[param_name])
+                        out += f"  {param_name}: {params[param_name]}\n"
                         count = count + 1
 
-                    if count > 0:
-                        sys.stdout.write(out)
+                    if not self.nslc and count > 0:
+                        print(out)
+
+        if self.nslc:
+            for stream in sorted(nslc):
+                print(stream, file=sys.stdout)
 
         return True
 
 
 try:
     app = DumpCfg(len(sys.argv), sys.argv)
-except:
+except Exception:
     sys.exit(1)
 
 sys.exit(app())

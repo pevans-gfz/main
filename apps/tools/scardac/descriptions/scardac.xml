@@ -1,25 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <seiscomp>
 	<module name="scardac" category="Acquisition">
-		<description>Waveform archive data availability collector</description>
+		<description>Waveform archive data availability collector.</description>
 		<configuration>
 			<parameter name="archive" type="string" default="@SEISCOMP_ROOT@/var/lib/archive">
 				<description>
-				Path to MiniSeed waveform archive where all data is stored. The SDS archive
-				structure is defined as
-				YEAR/NET/STA/CHA/NET.STA.LOC.CHA.YEAR.DATEOFYEAR, e.g.
+				The URL to the waveform archive where all data is stored.
+
+				Format: [service://]location[#type]
+
+				&quot;service&quot;: The type of the archive. If not given,
+				&quot;sds://&quot; is implied assuming an SDS archive. The SDS
+				archive structure is defined as
+				YEAR/NET/STA/CHA/NET.STA.LOC.CHA.YEAR.DAYFYEAR, e.g.
 				2018/GE/APE/BHZ.D/GE.APE..BHZ.D.2018.125
+
+				Other archive types may be considered by plugins.
 				</description>
 			</parameter>
 			<parameter name="threads" type="int" default="1">
 				<description>
-				Number of threads scanning the archive in parallel
-				</description>
-			</parameter>
-			<parameter name="batchSize" type="int" default="100">
-				<description>
-				Batch size of database transactions used when updating data
-				availability segments. Allowed range: [1,1000]
+				Number of threads scanning the archive in parallel.
 				</description>
 			</parameter>
 			<parameter name="jitter" type="float" default="0.5">
@@ -28,25 +29,99 @@
 				records in multiples of sample time.
 				</description>
 			</parameter>
-<!--
-			<parameter name="deepScan" type="boolean" default="false">
-				<description>
-				By default the last scan time of the extent is compared with
-				the record file modification time to read only files modified
-				since the list run. If deepscan is set to true all data files
-				are processed independ of their mtime.
-				</description>
-			</parameter>
--->
 			<parameter name="maxSegments" type="int" default="1000000">
 				<description>
 				Maximum number of segments per stream. If the limit is reached
 				no more segments are added to the database and the corresponding
-				extent is flagged as to fragmented. Use a negative value to
-				disable any limit.
+				extent is flagged as too fragmented. Set this parameter to 0 to
+				disable any limits.
 				</description>
 			</parameter>
+			<parameter name="nslcFile" type="string">
+				<description>
+				Line-based text file of form NET.STA.LOC.CHA defining available
+				stream IDs. Depending on the archive type, size and storage
+				media used this file may offer a significant performance
+				improvement compared to collecting the available streams on each
+				startup. Filters defined under `filter.nslc` still apply.
+				</description>
+			</parameter>
+			<group name="filter">
+				<description>
+				Parameters of this section limit the data processing to either
+
+				reduce the scan time of larger archives or to
+
+				prevent deletion of availability information even though parts
+				of the archive have been deleted or moved to a different
+				location.
+				</description>
+				<group name="time">
+					<description>
+					Limit the processing by record time.
+					</description>
+					<parameter name="start" type="string">
+						<description>
+						Start of data availability check given as date string or
+						as number of days before now.
+						</description>
+					</parameter>
+					<parameter name="end" type="string">
+						<description>
+						End of data availability check given as date string or
+						as number of days before now.
+						</description>
+					</parameter>
+				</group>
+				<group name="nslc">
+					<description>
+					Limit the processing by stream IDs.
+					</description>
+					<parameter name="include" type="list:string">
+						<description>
+						Comma-separated list of stream IDs to process. If
+						empty all streams are accepted unless an exclude filter
+						is defined. The following wildcards are supported: '*'
+						and '?'.
+						</description>
+					</parameter>
+					<parameter name="exclude" type="list:string">
+						<description>
+						Comma-separated list of stream IDs to exclude from
+						processing. Excludes take precedence over includes. The
+						following wildcards are supported: '*' and '?'.
+						</description>
+					</parameter>
+				</group>
+			</group>
+			<group name="mtime">
+				<description>
+				Parameters of this section control the rescan of data chunks.
+				By default the last update time of the extent is compared with
+				the record file modification time to read only files modified
+				since the list run.
+				</description>
+				<parameter name="ignore" type="boolean" default="false">
+					<description>
+					If set to true all data chunks are read independent of their
+					mtime.
+					</description>
+				</parameter>
+				<parameter name="start" type="string">
+					<description>
+					Only read chunks modified after specific date given as date
+					string or as number of days before now.
+					</description>
+				</parameter>
+				<parameter name="end" type="string">
+					<description>
+					Only read chunks modified before specific date given as date
+					string or as number of days before now.
+					</description>
+				</parameter>
+			</group>
 		</configuration>
+
 		<command-line>
 			<synopsis>
 				scardac [OPTION]...
@@ -58,7 +133,6 @@
 				<optionReference>generic#version</optionReference>
 				<optionReference>generic#config-file</optionReference>
 				<optionReference>generic#plugins</optionReference>
-				<optionReference>generic#daemon</optionReference>
 			</group>
 			<group name="Verbosity">
 				<optionReference>verbosity#verbosity</optionReference>
@@ -75,18 +149,34 @@
 				<optionReference>verbosity#log-file</optionReference>
 			</group>
 			<group name="Collector">
-				<option flag="a" long-flag="archive" argument="arg" publicID="collector#archive" param-ref="archive"/>
-				<option long-flag="threads" argument="arg" publicID="collector#threads" param-ref="threads"/>
-				<option flag="b" long-flag="batch-size" argument="arg" publicID="collector#batchsize" param-ref="batchsize"/>
-				<option flag="j" long-flag="jitter" argument="arg" publicID="collector#jitter" param-ref="jitter"/>
-<!-- Not yet implemented
-				<option long-flag="deep-scan" argument="" publicID="collector#deepscan" param-ref="deepScan"/>
--->
-				<option long-flag="generate-test-data" argument="arg" publicID="collector#generate-test-data">
+				<option flag="a" long-flag="archive" argument="arg"
+				    publicID="collector#archive" param-ref="archive"/>
+				<option long-flag="threads" argument="arg"
+				    publicID="collector#threads" param-ref="threads"/>
+				<option flag="j" long-flag="jitter" argument="arg"
+				    publicID="collector#jitter" param-ref="jitter"/>
+				<option long-flag="nslc" argument="arg"
+				    publicID="collector#nslc" param-ref="nslcFile"/>
+				<option long-flag="start" argument="arg"
+				    publicID="collector#start" param-ref="filter.time.start"/>
+				<option long-flag="end" argument="arg"
+				    publicID="collector#end" param-ref="filter.time.end"/>
+				<option long-flag="include" argument="arg"
+				    publicID="collector#include" param-ref="filter.nslc.include"/>
+				<option long-flag="exclude" argument="arg"
+				    publicID="collector#exclude" param-ref="filter.nslc.exclude"/>
+				<option long-flag="deep-scan" argument=""
+				    publicID="collector#deepscan" param-ref="mtime.ignore"/>
+				<option long-flag="modified-since" argument="arg"
+				    publicID="collector#modifiedsince" param-ref="mtime.start"/>
+				<option long-flag="modified-until" argument="arg"
+				    publicID="collector#modifieduntil" param-ref="mtime.end"/>
+				<option long-flag="generate-test-data" argument="arg"
+				    publicID="collector#generate-test-data">
 					<description>
 					Do not scan the archive but generate test data for each
 					stream in the inventory. Format:
-					days,gaps,gapslen,overlaps,overlaplen. E.g. the following
+					days,gaps,gapslen,overlaps,overlaplen. E.g., the following
 					parameter list would generate test data for 100 days
 					(starting from now()-100) which includes 150 gaps with a
 					length of 2.5s followed by 50 overlaps with an overlap of

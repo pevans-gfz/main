@@ -8,13 +8,26 @@
 			</parameter>
 			<group name="amptool">
 				<parameter name="minimumPickWeight" type="double" default="0.5">
-					<description>The minimum arrival weight within an origin to compute amplitudes for the associated pick.</description>
+					<description>
+					The minimum arrival weight within an origin to compute amplitudes for the associated pick.
+					</description>
+				</parameter>
+				<parameter name="streamFromBindings" type="boolean" default="false">
+					<description>
+					If enabled then global bindings will be used to replace
+					location code and channel code of a pick with the configured
+					values of detecLocid and detecStream for amplitude computation.
+					</description>
 				</parameter>
 				<parameter name="initialAcquisitionTimeout" type="double" default="30" unit="s">
-					<description>Timeout in seconds of the first data packet of waveform data acquisition.</description>
+					<description>
+					Timeout in seconds of the first data packet of waveform data acquisition.
+					</description>
 				</parameter>
 				<parameter name="runningAcquisitionTimeout" type="double" default="2" unit="s">
-					<description>Timeout in seconds of any subsequent data packet of waveform data acquisition.</description>
+					<description>
+					Timeout in seconds of any subsequent data packet of waveform data acquisition.
+					</description>
 				</parameter>
 			</group>
 		</configuration>
@@ -38,7 +51,7 @@
 					<description>Dumps the filtered traces to ASCII when using -O.</description>
 				</option>
 			</group>
-			
+
 			<group name="Verbosity">
 				<optionReference>verbosity#verbosity</optionReference>
 				<optionReference>verbosity#v</optionReference>
@@ -50,7 +63,7 @@
 				<optionReference>verbosity#debug</optionReference>
 				<optionReference>verbosity#log-file</optionReference>
 			</group>
-			
+
 			<group name="Messaging">
 				<optionReference>messaging#user</optionReference>
 				<optionReference>messaging#host</optionReference>
@@ -65,7 +78,7 @@
 					</description>
 				</option>
 			</group>
-			
+
 			<group name="Database">
 				<optionReference>database#db-driver-list</optionReference>
 				<optionReference>database#database</optionReference>
@@ -91,12 +104,19 @@
 					contains the amplitudes.
 					</description>
 				</option>
+				<option flag="p" long-flag="picks">
+					<description>
+					Force measuring amplitudes for picks only. Origins are
+					ignored and time windows are independent of distance. Works
+					only in combination with --ep.
+					</description>
+				</option>
 				<option long-flag="reprocess">
 					<description>
-					Reprocess and update existing amplitudes in combination with --ep.
-					Manual amplitudes will be skipped.
-					This option can be used, e.g. for reprocessing amplitudes with
-					new inventory information. Waveform access is required.
+					Reprocess and update existing amplitudes. Manual amplitudes
+					will be skipped. Works only in combination with --ep.
+					This option can be used, e.g., for reprocessing amplitudes
+					with new inventory information. Waveform access is required.
 					</description>
 				</option>
 			</group>

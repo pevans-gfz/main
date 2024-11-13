@@ -22,6 +22,7 @@
 #include <seiscomp/datamodel/databasequery.h>
 #include <seiscomp/datamodel/origin.h>
 #include <seiscomp/datamodel/eventparameters.h>
+#include <seiscomp/datamodel/journaling.h>
 #endif
 #include "ui_mainframe.h"
 
@@ -51,6 +52,7 @@ class MainFrame : public MainWindow {
 		void setOriginID(const std::string &originID);
 		void loadEvents(float days);
 		void setOffline(bool);
+		void openFile(const std::string &filename);
 
 
 	protected slots:
@@ -89,10 +91,8 @@ class MainFrame : public MainWindow {
 		void fileOpen();
 		void fileSave();
 
-#if QT_VERSION >= 0x040300
 		void trayIconActivated(QSystemTrayIcon::ActivationReason reason);
 		void trayIconMessageClicked();
-#endif
 
 	private:
 		bool populateOrigin(Seiscomp::DataModel::Origin*, Seiscomp::DataModel::Event*, bool);
@@ -109,10 +109,8 @@ class MainFrame : public MainWindow {
 
 	private:
 		Ui::MainFrame      _ui;
-#if QT_VERSION >= 0x040300
 		QSystemTrayIcon   *_trayIcon;
 		std::string        _trayMessageEventID;
-#endif
 		QAction           *_actionConfigureAcquisition;
 		EventListView     *_eventList;
 		EventSummary      *_eventSmallSummary;
@@ -125,6 +123,7 @@ class MainFrame : public MainWindow {
 
 		DataModel::OriginPtr _currentOrigin;
 		DataModel::EventParametersPtr _offlineData;
+		DataModel::JournalingPtr _offlineJournal;
 
 		bool               _expertMode;
 		bool               _magnitudeCalculationEnabled;

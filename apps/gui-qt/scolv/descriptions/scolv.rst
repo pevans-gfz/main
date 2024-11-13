@@ -73,7 +73,9 @@ scolv can be operated in 2 modes:
   are received from the :ref:`messaging <concepts_messaging>` or the database and
   *updated in real time*. New or updated
   parameters can be commited to the messaging. Simply start scolv without any argument
-  or connect to a specific host providing the messaging, e.g.: ::
+  or connect to a specific host providing the messaging, e.g.:
+
+  .. code-block:: sh
 
      scolv
      scolv -H [host]
@@ -81,10 +83,12 @@ scolv can be operated in 2 modes:
 * **Offline without messaging** where all event and station
   inventory parameters are read from an XML files or from the database and
   *updated interactively*. New or updated parameters can be written to an XML file.
-  Open scolv with the option
-  :option:`--offline` and optionally provide the database or inventory and bindings
+  Execute scolv with the command-line option
+  ``--offline`` and optionally provide the database or inventory and bindings
   parameters in :term:`SCML` format to fetch event parameters as well as inventory
-  and bindings configuration parameters. Examples: ::
+  and bindings configuration parameters. Examples:
+
+  .. code-block:: sh
 
      scolv --offline
      scolv --offline -d [database]
@@ -179,7 +183,7 @@ The move out plot uses the reduced travel time with a default reduction velocity
 of 6km/s. This value is configurable by :confval:`olv.Pvel`, either in the configuration file
 (:file:`scolv.cfg`) or in the :ref:`settings window <scolv-settings>`, e.g.:
 
-.. code-block:: sh
+.. code-block:: properties
 
    # Reduction velocity used for move out plot
    olv.Pvel = 6.0
@@ -242,7 +246,7 @@ Available column identifiers are:
 The columns printed bold are shown initially. The initial column
 list can be changed in :file:`scolv.cfg` by adjusting :confval:`olv.arrivalTable.visibleColumns`:
 
-.. code-block:: sh
+.. code-block:: properties
 
    olv.arrivalTable.visibleColumns = Used, Status, Weight, Phase, Net, Sta,\
                                      Loc/Cha, Res, Dis, Az, Time, +/-
@@ -441,7 +445,9 @@ Initially the picker window allows to pick the arrival times of the following ph
 
 Up to 9 phase types can be configured for selection by
 :ref:`hot keys <sec-scolv-hotkeys>`. This list of favourite phases can be customized
-by :confval:`picker.phases.favourites`, e.g. (:file:`scolv.cfg`): ::
+by :confval:`picker.phases.favourites`, e.g. (:file:`scolv.cfg`):
+
+.. code-block:: properties
 
    # Define a list of favourite phases for quick access
    picker.phases.favourites = Pn, P, Pg, PmP, P1, Pg, Sg, S, Sn, SmS
@@ -456,7 +462,7 @@ The phases can be also grouped to reflect e.g. regional
 and teleseismic profiles. In group not hot keys are available.
 An example configuration looks like this (:file:`scolv.cfg`):
 
-.. code-block:: sh
+.. code-block:: properties
 
    # Define two phase groups: regional and teleseismic
    picker.phases.groups = regional, teleseismic
@@ -512,7 +518,9 @@ Additionally, pick uncertainties can be defined freely whereas choosing
 among a predefined set of uncertainties is a lot faster. The way, pick uncertainties
 are used depends on the applied locator routine and its configuration.
 To set the uncertainty of a pick more easily a list of predefined uncertainties can be
-defined using :confval:`picker.uncertainties`, e.g.: ::
+defined using :confval:`picker.uncertainties`, e.g.:
+
+.. code-block:: properties
 
    picker.uncertainties = 0.05, 0.1, 0.2, "(0.1,0.2)", "(0.05,0.02)"
 
@@ -521,7 +529,9 @@ The pre-defined uncertainties can be selected during picking using
 :ref:`hot keys <sec-scolv-hotkeys>`, e.g.
 :kbd:`1` or :kbd:`2` for the 1st or the 2nd value defined in :confval:`picker.uncertainties`.
 Later, the uncertainties can be adjusted manually.
-As for phase types, uncertainty profiles can be additionally configured (:file:`scolv.cfg`): ::
+As for phase types, uncertainty profiles can be additionally configured (:file:`scolv.cfg`):
+
+.. code-block:: properties
 
    # Define available pick uncertainty profiles. Single values
    # are symmetric uncertainties whereas tuples are asymmetric
@@ -598,17 +608,17 @@ The locators available by default in |scname| are
 * :ref:`FixedHypocenter <global_locsat>`.
 
 Additional locator routines are available by :ref:`concepts_plugins` which
-provide their own specific global configuration, e.g.
-
-* :ref:`Hypo71 <global_hypo71>`,
-* :ref:`NonLinLoc <global_nonlinloc>`,
-* iLoc (currently only on when :ref:`building SeisComP from source <build>`).
-
-Any other custom locator can be intergrated through configuration of
-:ref:`global_locext`.
+provide their own specific global configuration. Read the
+:ref:`concepts section on locators <concepts_locators>` for an introduction.
 
 Pressing *Relocate* creates a new origin and updates the arrival table and the
 parameters displayed in the Location tab.
+
+Undoing and redoing actions is availalbe by buttons and
+:ref:`hot keys <sec-scolv-hotkeys>`.
+
+.. figure:: media/scolv/tab_previous-next.png
+   :align: center
 
 .. hint::
 
@@ -626,21 +636,33 @@ and new magnitudes can be calculated by using the
 committing the new origin, is the possibility to check the resulting magnitudes
 before they are computed manually by :ref:`scmag`.
 
+:ref:`An amplitudes status window <fig-scolv-location-amp-status>` will pop up showing the progress
+information of measurements. The amplitudes are either measured or fetched from
+database if the pick is unchanged and the amplitude is already in the system.
+For new manual picks, waveforms are requested to measured the amplitudes. The
+popup window contains information about the progress, limitations and possible
+errors.
+
+.. _fig-scolv-location-amp-status:
+
+.. figure:: media/scolv/tab_location_amp_status.png
+   :align: center
+
+   Measure amplitudes status window.
+
+After closing the amplitude status window magnitudes are computed and
+possible limitations are shown, if applicable, in the magnitudes status window.
+Confirm this window in order to proceed.
+
 .. _fig-scolv-location-mag-status:
 
 .. figure:: media/scolv/tab_location_mag_status.png
    :align: center
 
-   Compute magnitudes status window
+   Compute magnitudes status window.
 
-:ref:`A window <fig-scolv-location-mag-status>` will pop up showing the progress
-information of computation. The amplitudes are either fetched from database if
-the pick is unchanged and already in the system. For new manual picks,
-waveforms are requested to compute the amplitudes. The popup window contains
-information about the progress and possible errors. After closing this windows
-all available magnitudes are shown and can be interactively re-processed
-in the :ref:`magnitudes tab <scolv-sec-magnitude-tab>`.
-
+All available magnitudes are then shown and can be interactively re-processed in
+the :ref:`Magnitudes tab <scolv-sec-magnitude-tab>`.
 
 
 .. _scolv-sec-commit:
@@ -653,31 +675,48 @@ to the processing system and let it decide what origin becomes preferred.
 
 To optimize the workflow
 
-1. Select an event
-2. Review solution
-3. Commit solution
-4. Change to event tab
-5. Set this solution preferred
-6. Set event type
-7. Change to events tab
-8. Goto 1.
+#. Select an event
+#. Review solution
+#. Commit solution
+#. *Optional:* Change to Event tab for setting
 
-This may be replaced by
+   * This solution preferred
+   * Event type
+   * Event certainty
+   * Preferred magnitude
+   * Preferred focal mechanism
 
-1. Select an event
-2. Review solution
-3. Commit solution
-4. Change to events tab
-5. Goto 1.
+#. Change to Events tab
+#. Goto 1.
 
-An additional commit mode was added which allows to set certain parameters and
-options along with the location and its magnitudes.
+Instead of selecting events from the Events tab, the previous or the next event
+can be conveniently selected from the edit buttons above the Location tab.
+
+.. figure:: media/scolv/tab_previous-next.png
+   :align: center
+
+
+.. _scolv-sec-commit-additional:
+
+Additional options
+^^^^^^^^^^^^^^^^^^
+
+Instead of optionally setting parameters in the Event tab an additional commit
+mode allows to directly set certain parameters such as
+
+* Event type
+* Ovent certainty
+* Origin
+* Event comment
+
+and to choose options along with the location and its magnitudes. After pressing
+and holding the Commit button down for a little while, a menu pops up which
+allows to select *With additional options*.
 
 .. figure:: media/scolv/commit-options.png
    :align: center
 
-After pressing and holding the Commit button down for a little while, a menu
-pops up which allows to select *With additional options*. Selecting this entry
+Selecting this entry
 brings up another window where the different options can be set.
 
 .. figure:: media/scolv/commit-options2.png
@@ -692,9 +731,16 @@ event list is activated after pressing OK to select another event quickly.
  description will be removed from the event otherwise it will be added.
 
 *Comment*
- contains an optional event comment added as comment with ID *Operator*.
+ Contains an optional event comment added as comment with ID *Operator*. The
+ comment text can be visualized in event lists
+ (:ref:`Events tab <scolv-events-tab>`) by configuration of the global parameters
+ :confval:`eventlist.customColumn.eventCommentID` or :confval:`eventlist.scripts.*`.
+
 
 .. _sec-scolv-custom-commit:
+
+Custom commits
+^^^^^^^^^^^^^^
 
 As a shortcut for committing with additional options,
 :ref:`custom commit buttons <fig-scolv-custom-commit>` can be added by
@@ -912,7 +958,7 @@ amplitude processor. Be warned that wrongly applied filters screw up the results
 The available filters can be defined in the settings dialog of scolv or in the
 configuration file similar to the manual picker filters (:file:`scolv.cfg`):
 
-.. code-block:: sh
+.. code-block:: properties
 
    # List of filters available in the picker. Format:
    # "name1;filter-definition1", "name2;filter-definition2"
@@ -976,6 +1022,8 @@ stations or disabled amplitudes are ignored. At this stage all magnitudes are
 calculated and the network magnitude is calculated according to the available
 settings: *Mean*, *Median* or *Trimmed mean*.
 
+
+.. _scolv-sec-event-tab:
 
 Event Tab
 =========
@@ -1061,8 +1109,8 @@ Focal Mechanism list
 --------------------
 
 The Focal Mechanism tab shows all focal mechanisms and moment tensors associated
-to the selected event. You may fix the preferred mechanism or fix/unfix :term:`Mw`
-to become the preferred magnitude.
+to the selected event. You may fix the preferred mechanism or fix/unfix
+:term:`Mw <magnitude, moment (Mw)>` to become the preferred magnitude.
 
 Select a row or cell and
 press the right mouse button to copy the row or cell, respectively.
@@ -1136,7 +1184,7 @@ The available identifiers are:
 * **Region** : region name
 * **ID** : ID of the show element, e.g. event or origin
 
-The bold identifiers are visible initially.
+The bold identifiers are visible initially by default.
 To show or hide columns interactively click with the right mouse button on the
 table header and check or uncheck the corresponding column.
 
@@ -1144,15 +1192,14 @@ Sorting and re-ordering is available by clicking on the header of the columns an
 by dragging the header fields, respectively. Right-click on cells to copy individual
 cells values or entire rows.
 
-This list can also be customized
-with :confval:`eventlist.visibleColumns` in the global configuration
-(:file:`scolv.cfg` or :file:`global.cfg`):
+The initial list can configured with the global module parameter
+:confval:`eventlist.visibleColumns` in :file:`global.cfg` or :file:`scolv.cfg`,
+e.g.:
 
-.. code-block:: sh
+.. code-block:: properties
 
    # Remove Type and Author from column list that is initially active
-   eventlist.visibleColumns = OT(GMT), Type, M, MType Phases, RMS, Lat, Lon,\
-                              Depth, DType, Stat, FM, Author, Agency, Region, ID
+   eventlist.visibleColumns = Type, M, MType Phases, RMS, Lat, Lon, Depth, DType, Stat, FM, Author, Agency, Region, ID
 
 
 .. _scolv-events-filtering:
@@ -1162,6 +1209,7 @@ Event filtering
 
 Database request filters can be applied interactively or automatically by
 
+* **Time:** Select a time period or a number of days before current time.
 * **Interactive custom request filters**: You may set and adjust a custom request
   filter** in the filter parameter window which opens when pressing the Filter
   button. Press *Read* to reload the events list based on the filter parameters.
@@ -1170,73 +1218,80 @@ Database request filters can be applied interactively or automatically by
   Use the :ref:`global` for presetting the values (:file:`scolv.cfg` or
   :file:`global.cfg`), e.g.:
 
-  .. code-block:: sh
+  .. code-block:: properties
 
      eventlist.filter.database.minlat = 51.0
 
-* **Preset filters** based on
+Event lists already loaded from from the database can be filtered by
 
-  * **Event type:** Activate by check box *Hide other/fake events*. If checked, all
-    events with the configured types are hidden from the list. The default event types
-    to hide are *not existing* and *other* are hidden. If unchecked, the filtering
-    is inactive and the events are shown. **Pressing the Hide button only affects
-    the currently loaded list.** Configure the event types used for this filter as well
-    as the label text for the checkbox.
-    Use the :ref:`global` for presetting the values s (:file:`scolv.cfg` or :file:`global.cfg`):
+* **Event type:** Activate by check box *Hide other/fake events*. If checked, all
+events with the configured types are hidden from the list. The default event types
+to hide are *not existing* and *other* are hidden. If unchecked, the filtering
+is inactive and the events are shown. **Pressing the Hide button only affects
+the currently loaded list.** Configure the event types used for this filter as well
+as the label text for the checkbox.
+Use the :ref:`global` for presetting the values s (:file:`scolv.cfg` or :file:`global.cfg`):
 
-    .. code-block:: sh
+.. code-block:: properties
 
-       # Define the event types to be filtered
-       eventlist.filter.types.blacklist = "not existing", "other",\
-                                          "outside of network interest"
+   # Define the event types to be filtered
+   eventlist.filter.types.blacklist = "not existing", "other",\
+                                      "outside of network interest"
 
-       # Define the label of the button to filter the events
-       eventlist.filter.types.label = "Hide fake events"
+   # Define the label of the button to filter the events
+   eventlist.filter.types.label = "Hide fake events"
 
-       # Define the default behavior
-       eventlist.filter.types.enabled = true
+   # Define the default behavior
+   eventlist.filter.types.enabled = true
 
-  * **Agency**: Activate by check boxes *Show only own origin* and/or "Show only
-    latest/preferred origin per agency". The button *Show only own events*
-    will hide all events where the preferred origins agencyID is not the configured
-    :confval:`agencyID` of scolv. This is the default behavior which can be customized
-    (:file:`scolv.cfg` or :file:`global.cfg`):
+* **Agency**: Activate by check boxes *Show only own origin* and/or "Show only
+  latest/preferred origin per agency". The button *Show only own events*
+  will hide all events where the preferred origins agencyID is not the configured
+  :confval:`agencyID` of scolv. This is the default behavior which can be customized
+  (:file:`scolv.cfg` or :file:`global.cfg`):
 
-    .. code-block:: sh
+  .. code-block:: properties
 
-       # Set the preferred agencyIDs to GFZ and EMSC
-       eventlist.filter.agencies.whitelist = GFZ, EMSC
+     # Set the preferred agencyIDs to GFZ and EMSC
+     eventlist.filter.agencies.whitelist = GFZ, EMSC
 
-       # Set type to 'origins' which means that an event will pass the filter if
-       # at least one origin is from a preferred agency defined with the whitelist
-       # above. The default type is 'events' which checks only the events preferred
-       # origin.
-       eventlist.filter.agencies.type = origins
+     # Set type to 'origins' which means that an event will pass the filter if
+     # at least one origin is from a preferred agency defined with the whitelist
+     # above. The default type is 'events' which checks only the events preferred
+     # origin.
+     eventlist.filter.agencies.type = origins
 
-       # Defines the text of the option "Show only own events".
-       eventlist.filter.agencies.label = "Show only own events"
+     # Defines the text of the option "Show only own events".
+     eventlist.filter.agencies.label = "Show only own events"
 
-       # Enable this filter initially. If this option is not used, the filter
-       # is disabled by default.
-       eventlist.filter.agencies.enabled = true
+     # Enable this filter initially. If this option is not used, the filter
+     # is disabled by default.
+     eventlist.filter.agencies.enabled = true
 
-  * **Source region:** Select a source region, activate "Hide events" and choose to
-    hide events inside or outside the region.
-    **Pressing the Hide button only affects the currently loaded list.**
-    Pre-defined regions can be configured in the global configuration
-    (:file:`scolv.cfg`, :file:`global.cfg`):
+* **Source region:** Select a source region, activate "Hide events" and choose to
+  hide events inside or outside the region.
+  **Pressing the Hide button only affects the currently loaded list.**
+  Pre-defined regions can be configured in the global configuration per bounding
+  box or region defined by a BNA or GeoJSON polygon
+  (:file:`global.cfg`, :file:`scolv.cfg`):
 
-    .. code-block:: sh
+  .. code-block:: properties
 
-       # Configured a list of regions that can be used as filter of the result set.
-       eventlist.filter.regions.profiles = chile
+     # Configured a list of regions that can be used as filter of the result set.
+     eventlist.filter.regions.profiles = chile
 
-       # Defines the name of the region that shows up in the listbox.
-       eventlist.filter.regions.region.chile.name = Chile
+     # Defines the name of the region that shows up in the listbox.
+     eventlist.filter.regions.region.chile.name = Chile
 
-       # Defines a rectangular region with a list of 4 values: latmin, lonmin, latmax,
-       # lonmax.
-       eventlist.filter.regions.region.chile.rect = -40, -80, -10, -60
+     # Defines a rectangular region with a list of 4 values: latmin, lonmin, latmax,
+     # lonmax.
+     # eventlist.filter.regions.region.chile.rect = -40, -80, -10, -60
+
+     # Defines the name of the polygon for the region check. If defined then the
+     # rect region has no effect. The configured polygon name is being search for in
+     # the global FEP regions and the spatial vector layer. The first polygon found
+     # with the given name will be taken.
+     eventlist.filter.regions.region.chile.poly = chile
 
 
 .. _scolv-custom-actions:
@@ -1272,7 +1327,7 @@ Location tab
 To add an origin comment value to the information panel of the Location tab,
 configure display parameters in scolv. Example (:file:`scolv.cfg`):
 
-.. code-block:: sh
+.. code-block:: properties
 
    # Define the comment id to be used
    display.origin.comment.id = SED.quality
@@ -1291,7 +1346,7 @@ To add a custom column to the **origin list of the Event tab** showing an origin
 comment value, configure eventedit parameters in scolv or global. Example
 (:file:`scolv.cfg` or :file:`global.cfg`):
 
-.. code-block:: sh
+.. code-block:: properties
 
    # Define the default value if no comment is present
    eventedit.origin.customColumn.default = "-"
@@ -1319,7 +1374,7 @@ To add a custom column to the **event list of the Events tab** using a comment
 value, configure eventlist parameters in scolv or global. Example
 (:file:`scolv.cfg` or :file:`global.cfg`):
 
-.. code-block:: sh
+.. code-block:: properties
 
    # Define the default value if no comment is present
    eventlist.customColumn.default = "-"
@@ -1342,6 +1397,19 @@ value, configure eventlist parameters in scolv or global. Example
 
 The last three examples are used to show the *SED.quality* comment value which
 is set by the :ref:`NonLinLoc locator plugin <global_nonlinloc>`.
+
+In order to show event comments, e.g.,
+:ref:`set during committing <scolv-sec-commit-additional>` replace
+:confval:`eventlist.customColumn.originCommentID` by
+:confval:`eventlist.customColumn.eventCommentID`:
+
+.. code-block:: properties
+
+   # Define the comment id to be used
+   eventlist.customColumn.eventCommentID = "Operator"
+
+   # Define the column header label
+   eventlist.customColumn.name = "Operator"
 
 
 .. _sec-scolv-scripts:
@@ -1367,12 +1435,16 @@ buttons to the **Location tab**.
 When pressing the custom buttons, user-defined external scripts are executed.
 Configuration (:file:`scolv.cfg`):
 
-* Button in Summary window: :confval:`scripts.export`. Read :confval:`scripts.export`
-  for the description of the parameters passed to the script.
-* Up to 2 buttons in Location tab: :confval:`button0`, :confval:`scripts.script0`,
-  :confval:`button1`,  :confval:`scripts.script1` Read :confval:`scripts.script0`
-  and :confval:`scripts.script1` for the description of the parameters passed to
-  the scripts.
+* Button in Summary window. Configure: :confval:`scripts.export` and read
+  :confval:`scripts.export` for the description of the parameters passed to the
+  script.
+* Up to 2 buttons in Location tab. Configure:
+
+  * button1: :confval:`button0`, :confval:`scripts.script0`,
+  * button2: :confval:`button1`,  :confval:`scripts.script1`.
+
+  Read :confval:`scripts.script0` and :confval:`scripts.script1` for the
+  description of the parameters passed to the scripts.
 
 
 .. _sec-scolv-information:
@@ -1393,7 +1465,10 @@ Below you find examples for
 * :ref:`Custom information in the Event tab <sec-scolv-parameters-event>`
 * :ref:`Custom information in the Events tab <sec-scolv-parameters-events>`
 
-An example script which just returns the standard error looks like this:
+.. _sec-scolv-example-script:
+
+Example script reading origin parameters from stdin just returning the standard
+error of the origin:
 
 .. code-block:: python
 
@@ -1456,19 +1531,20 @@ Location tab
 ~~~~~~~~~~~~
 
 To add the output of an external custom script to the information panel of the Location tab,
-configure display parameters in scolv. Example (:file:`scolv.cfg`):
+configure display parameters in scolv. An example script is given
+:ref:`above <sec-scolv-example-script>`. Configuration example (:file:`scolv.cfg`):
 
-.. code-block:: sh
+.. code-block:: properties
 
    # Define the available add-ons to be used
    display.origin.addons = qual, qual2
 
    # Configure each add-on
    display.origin.addon.qual1.label = "Qual1"
-   display.origin.addon.qual1.script = "@CONFIGDIR@/scripts/scolv/qual1"
+   display.origin.addon.qual1.script = "@DATADIR@/scripts/scolv/script1"
 
    display.origin.addon.qual2.label = "Qual2"
-   display.origin.addon.qual2.script = "@CONFIGDIR@/scripts/scolv/qual2"
+   display.origin.addon.qual2.script = "@DATADIR@/scripts/scolv/script2"
 
 
 .. _sec-scolv-parameters-event:
@@ -1476,18 +1552,22 @@ configure display parameters in scolv. Example (:file:`scolv.cfg`):
 Event tab
 ~~~~~~~~~
 
-Provide an external script and add the output to the **origin list of the Event tab**,
-configure the eventedit parameters in scolv or global. Example (:file:`scolv.cfg` or :file:`scolv.cfg`):
+Provide the external script and add the output to the **origin list of the Event tab**,
+configure the eventedit parameters in :file:`global.cfg` or :file:`scolv.cfg`.
+An example script is given :ref:`above <sec-scolv-example-script>`.
+Configuration example:
 
-.. code-block:: sh
+.. code-block:: properties
 
    eventedit.scripts.columns = qual1, qual2
+
    eventedit.scripts.column.qual1.label = "Qual1"
    eventedit.scripts.column.qual1.pos = 8
-   eventedit.scripts.column.qual1.script = "@CONFIGDIR@/scripts/scolv/qual1"
+   eventedit.scripts.column.qual1.script = "@DATADIR@/scripts/scolv/script1"
+
    eventedit.scripts.column.qual2.label = "Qual2"
    eventedit.scripts.column.qual2.pos = 9
-   eventedit.scripts.column.qual2.script = "@CONFIGDIR@/scripts/scolv/qual2"
+   eventedit.scripts.column.qual2.script = "@DATADIR@/scripts/scolv/script2"
 
 
 .. _sec-scolv-parameters-events:
@@ -1495,18 +1575,28 @@ configure the eventedit parameters in scolv or global. Example (:file:`scolv.cfg
 Events tab
 ~~~~~~~~~~
 
-Provide an external script and add the output to **event list of the Events tab**,
-configure the eventlist parameters in scolv or global. Example (:file:`scolv.cfg` or :file:`global.cfg`):
+From the event list external scripts can be excuted with :term:`origin` or
+:term:`event` objects or both as input from stdin to display the output of the
+script (stdout) in a custom column.
 
-.. code-block:: sh
+Provide an external script and add the output to **event list of the Events tab**,
+configure the eventlist parameters in :file:`global.cfg` or :file:`scolv.cfg`.
+An example script is given :ref:`above <sec-scolv-example-script>`.
+Configuration example for passing origin or event objects:
+
+.. code-block:: properties
 
    eventlist.scripts.columns = qual1, qual2
+
    eventlist.scripts.column.qual1.label = "Qual1"
    eventlist.scripts.column.qual1.pos = 5
-   eventlist.scripts.column.qual1.script = "@CONFIGDIR@/scripts/scolv/qual1"
+   eventlist.scripts.column.qual1.script = "@DATADIR@/scripts/scolv/script1"
+   eventlist.scripts.column.qual1.types = Origin
+
    eventlist.scripts.column.qual2.label = "Qual2"
    eventlist.scripts.column.qual2.pos = 6
-   eventlist.scripts.column.qual2.script = "@CONFIGDIR@/scripts/scolv/qual2"
+   eventlist.scripts.column.qual2.script = "@DATADIR@/scripts/scolv/script2"
+   eventlist.scripts.column.qual2.types = Event
 
 Adding external scripts to the event list is the most expensive part. Whenever
 the event list is reloaded, it will start to run the scripts on all origins
@@ -1624,14 +1714,14 @@ Units and precisions
 Local network users prefer the distance unit in kilometers while others prefer degrees.
 scolv (as any other GUI) can be configured to show either the one or the other.
 
-.. code-block:: sh
+.. code-block:: properties
 
    # If true, show distances in km. Use degree otherwise.
    scheme.unit.distanceInKM = true
 
 Furthermore the precision of various values can be configured:
 
-.. code-block:: sh
+.. code-block:: properties
 
    # Precision of depth values.
    scheme.precision.depth = 0
@@ -1649,7 +1739,7 @@ Furthermore the precision of various values can be configured:
    adjusted in *scheme* section of the :ref:`global configuration <global>`.
 
 
-.. _sec-scolv-hotkeys ::
+.. _sec-scolv-hotkeys:
 
 Hotkeys
 =======
@@ -1697,7 +1787,7 @@ actions in scolv. The hotkeys are provided for:
 +------------------------+-------------------------------------------------------------+
 | Double click           | Center map at the clicked position                          |
 +------------------------+-------------------------------------------------------------+
-| **Picker**             |                                                             |
+| **Phase picker**       |                                                             |
 +------------------------+-------------------------------------------------------------+
 | 1 .. 9                 | Activate configured phase picking                           |
 +------------------------+-------------------------------------------------------------+
@@ -1713,13 +1803,15 @@ actions in scolv. The hotkeys are provided for:
 +------------------------+-------------------------------------------------------------+
 | Shift+F                | Toggle limiting filters to the selected trace               |
 +------------------------+-------------------------------------------------------------+
-| G                      | Toggle through all configured filters                       |
+| G                      | Toggle through all configured filters: descending           |
++------------------------+-------------------------------------------------------------+
+| D                      | Toggle through all configured filters: ascending            |
 +------------------------+-------------------------------------------------------------+
 | N                      | Switch to N-component                                       |
 +------------------------+-------------------------------------------------------------+
 | S                      | Maximize visible amplitudes                                 |
 +------------------------+-------------------------------------------------------------+
-| X                      | Scroll down (through the traces)                            |
+| X                      | Deactivate a trace and scroll down (through the traces)     |
 +------------------------+-------------------------------------------------------------+
 | Z                      | Switch to Z-component                                       |
 +------------------------+-------------------------------------------------------------+
@@ -1802,6 +1894,8 @@ actions in scolv. The hotkeys are provided for:
 +------------------------+-------------------------------------------------------------+
 | Shift+WheelDown        | Time zoom out                                               |
 +------------------------+-------------------------------------------------------------+
+| W                      | Reset zoom window to the length of the picking overview     |
++------------------------+-------------------------------------------------------------+
 | *Picking overview*     |                                                             |
 +------------------------+-------------------------------------------------------------+
 | Alt+D                  | Sort by distance                                            |
@@ -1822,7 +1916,21 @@ actions in scolv. The hotkeys are provided for:
 +------------------------+-------------------------------------------------------------+
 | Shift+Y                | Increase row height                                         |
 +------------------------+-------------------------------------------------------------+
-| **Magnitude waveforms**|                                                             |
+| **Amplitude picker**   |                                                             |
++------------------------+-------------------------------------------------------------+
+| *Zoom trace*           |                                                             |
++------------------------+-------------------------------------------------------------+
+| Ctrl+Down              | Scale amplitudes down                                       |
++------------------------+-------------------------------------------------------------+
+| Ctrl+Up                | Scale amplitudes up                                         |
++------------------------+-------------------------------------------------------------+
+| Ctrl+Right             | Decrease visible time span (zoom in)                        |
++------------------------+-------------------------------------------------------------+
+| Ctrl+Left              | Increase visible time span (zoom out)                       |
++------------------------+-------------------------------------------------------------+
+| W                      | Reset zoom window to the length of the picking overview     |
++------------------------+-------------------------------------------------------------+
+| *Trace overview*       |                                                             |
 +------------------------+-------------------------------------------------------------+
 | F5                     | Compute network magnitudes and return to Magnitudes tab     |
 +------------------------+-------------------------------------------------------------+
@@ -1843,6 +1951,8 @@ actions in scolv. The hotkeys are provided for:
 | Shift+Right            | Move trace view to left (rough)                             |
 +------------------------+-------------------------------------------------------------+
 | R                      | Recompute amplitude of selected station                     |
++------------------------+-------------------------------------------------------------+
+| Shift+W                | Reset all noise and signal time windows as configured       |
 +------------------------+-------------------------------------------------------------+
 | X                      | Deactivate selected pick or station                         |
 +------------------------+-------------------------------------------------------------+
