@@ -4,7 +4,7 @@
 		<description>Inventory database synchronisation.</description>
 		<command-line>
 			<synopsis>
-			scinv command [options] [files]
+				scinv command [options] [files]
 			</synopsis>
 			<description>
 			Command is one of: sync, merge, apply, keys, ls and check.
@@ -18,6 +18,9 @@
 				<optionReference>generic#auto-shutdown</optionReference>
 				<optionReference>generic#shutdown-master-module</optionReference>
 				<optionReference>generic#shutdown-master-username</optionReference>
+				<optionReference>generic#print-config-vars</optionReference>
+				<optionReference>generic#validate-schema-params</optionReference>
+				<optionReference>generic#dump-settings</optionReference>
 			</group>
 
 			<group name="Verbosity">
@@ -30,6 +33,10 @@
 				<optionReference>verbosity#console</optionReference>
 				<optionReference>verbosity#debug</optionReference>
 				<optionReference>verbosity#log-file</optionReference>
+				<optionReference>verbosity#print-context</optionReference>
+				<optionReference>verbosity#print-component</optionReference>
+				<optionReference>verbosity#log-utc</optionReference>
+				<optionReference>verbosity#trace</optionReference>
 			</group>
 
 			<group name="Messaging">
@@ -47,33 +54,74 @@
 				<optionReference>database#database</optionReference>
 				<optionReference>database#config-module</optionReference>
 				<optionReference>database#inventory-db</optionReference>
-				<option flag="" long-flag="db-disable" argument="" publicID="database#db-disable">
-					<description>Do not use the database at all</description>
-				</option>
+				<optionReference>database#db-disable</optionReference>
 			</group>
 
 			<group name="Manager">
 				<option long-flag="filebase" argument="dir">
 					<description>
-					Filebase to check for XML files. If not given, all XML files passed
-					are checked.
+					Directory to check for inventory XML files. If not given,
+					all XML files passed are checked.
 					</description>
 				</option>
 				<option long-flag="rc-dir" argument="dir">
 					<description>
-					If given, rc (resource) files will be created in this directory for
-					each station. The station descriptions will be from the last available
-					epoch.
+					If given, rc (resource) files will be created in this
+					directory for each station. The station descriptions will be
+					from the last available epoch.
 					</description>
 				</option>
 				<option long-flag="key-dir" argument="dir">
 					<description>
-					If given this directory is used to synchronise key files.
+					The directory to synchronise key files to. If not given,
+					@SYSTEMCONFIGDIR@/key is assumed.
 					</description>
 				</option>
 				<option flag="o" long-flag="output" argument="file">
 					<description>
-					Output file.
+					Output file for writing inventory XML after merging.
+					</description>
+				</option>
+				<option long-flag="purge-keys">
+					<description>
+					(default) Delete key files if a station does not exist in
+					inventory.
+					</description>
+				</option>
+				<option long-flag="no-purge-keys">
+					<description>
+					Do not delete key files if a station does not exist in
+					inventory.
+					</description>
+				</option>
+			</group>
+
+			<group name="Check">
+				<option long-flag="distance" unit="km" default="10">
+					<description>
+					Maximum allowed distance between station and location
+					coordinates when using the check command.
+					</description>
+				</option>
+				<option long-flag="max-elevation-difference" unit="m" default="500">
+					<description>Maximum allowed difference in elevation
+					between station and sensorlocation in m. Larger differences
+					will be reported.
+					</description>
+				</option>
+				<option long-flag="max-sensor-depth" unit="m" default="500">
+					<description>
+					Maximum allowed depth of channel (sensor). This is the depth
+					of the sensor below the surface in m. Larger depths will be
+					reported.
+					</description>
+				</option>
+			</group>
+
+			<group name="List">
+				<option long-flag="compact">
+					<description>
+					Enable compact output for ls: each object one line.
 					</description>
 				</option>
 				<option long-flag="level" argument="int">
@@ -82,32 +130,27 @@
 					"cha" or "resp". Default is "cha".
 					</description>
 				</option>
-				<option long-flag="compact">
+				<option long-flag="nslc">
 					<description>
-					Enable compact output for ls: each object one line.
+					Enable NSLC output for ls as  NET.STA.LOC.CHA. The option
+					implies level = cha.
 					</description>
 				</option>
 			</group>
+
 			<group name="Merge">
 				<option long-flag="strip">
 					<description>
-					Remove unreferenced objects (dataloggers, sensors, ...).
+					Remove unreferenced objects (data loggers, sensors, ...).
 					</description>
 				</option>
 			</group>
-			<group name="Check">
-				<option long-flag="distance" unit="km" default="10">
-					<description>
-					Maximum allowed distance between station and location coordinates
-					when using the check command.
-					</description>
-				</option>
-			</group>
+
 			<group name="Sync">
 				<option long-flag="create-notifier">
 					<description>
-					If an output file is given then all notifiers will be saved and not
-					the result set itself.
+					If an output file is given, then all notifiers will be saved
+					and not the result set itself.
 					</description>
 				</option>
 				<option long-flag="no-keys">
@@ -120,24 +163,15 @@
 					Do not synchronise rc files.
 					</description>
 				</option>
-				<option long-flag="purge-keys">
-					<description>
-					(default) Delete key files if a station does not exist in inventory.
-					</description>
-				</option>
-				<option long-flag="no-purge-keys">
-					<description>
-					Do not delete key files if a station does not exist in inventory.
-					</description>
-				</option>
 				<option long-flag="test">
 					<description>
-					Do not send any notifiers and just output resulting operations and
-					conflicts.
+					Do not send any notifiers and just output resulting
+					operations and conflicts.
 					</description>
 				</option>
 			</group>
 		</command-line>
+
 		<configuration>
 			<parameter name="syncKeys" type="boolean" default="true">
 				<description>
@@ -150,10 +184,25 @@
 				</description>
 			</parameter>
 			<group name="check">
+				<description>
+				Quantities probed when using the check command.
+				</description>
 				<parameter name="maxDistance" type="double" unit="km" default="10">
 					<description>
-					Maximum allowed distance between station and location coordinates
-					when using the check command.
+					Maximum allowed distance between station and sensor location
+					coordinates.
+					</description>
+				</parameter>
+				<parameter name="maxElevationDifference" type="double" unit="m" default="500">
+					<description>
+					Maximum allowed differences between elevation of station and
+					sensor location.
+					</description>
+				</parameter>
+				<parameter name="maxSensorDepth" type="double" unit="m" default="500">
+					<description>
+					Maximum allowed depth of channel (sensor). This is the depth
+					of the sensor below the surface.
 					</description>
 				</parameter>
 			</group>

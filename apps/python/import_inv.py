@@ -104,13 +104,33 @@ class Importer(seiscomp.client.Application):
             return False
 
         files = glob.glob(path)
+        formats = []
         for f in files:
             prog = os.path.basename(f)
-            prog = prog[:prog.find("2inv")]
-            sys.stdout.write("%s\n" % prog)
+            formats.append(prog[:prog.find("2inv")])
+
+        formats.sort()
+        sys.stdout.write("%s\n" % "\n".join(formats))
 
         return True
 
+    def printUsage(self):
+
+        print('''Usage:
+  import_inv [FORMAT] input [output]
+  import_inv help [topic]
+
+Import inventory information from various sources.''')
+
+        seiscomp.client.Application.printUsage(self)
+
+        print('''Examples:
+List all supported inventory formats
+  import_inv help formats
+
+Convert from FDSN stationXML to SeisComp format
+  import_inv fdsnxml inventory_fdsnws.xml inventory_sc.xml
+''')
 
 if __name__ == "__main__":
     app = Importer(len(sys.argv), sys.argv)

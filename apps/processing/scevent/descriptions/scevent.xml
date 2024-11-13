@@ -29,16 +29,36 @@
 					[w] is an optional width parameter.
 				</description>
 			</parameter>
+			<parameter name="eventIDLookupMargin" type="integer" default="-1">
+				<description>
+					Configures the number of event ID slots to look back and
+					forth when an event ID is already taken. The default in
+					previous versions was 5. Now -1 means that the margin is
+					determined automatically based on "eventAssociation.eventTimeBefore"
+					and "eventAssociation.eventTimeAfter". According to the
+					configured "eventIDPattern" a fixed time range per slot
+					can be computed and with that width the number of look
+					ahead slots and look back slots can be computed based on
+					the given time ranges for event association.
+				</description>
+			</parameter>
+			<parameter name="populateFERegion" type="boolean" default="false">
+				<description>
+					If enabled, then the EventDescription with type
+					'Flinn-Engdahl region' will be populated with the
+					Flinn-Engdahl region name.
+				</description>
+			</parameter>
 			<group name="processing">
 				<group name="blacklist">
 					<parameter name="eventIDs" type="list:string">
 						<description>
-						Defines a blacklist of event ids. The items of this list
-						are only matches against %c, %C, %d, %x and %X of the
-						eventIDPattern description. Year (%Y) and prefix (%p) are
-						not matched. The match is case-sensitive, so blacklisting
-						e.g. abcd would only match in combination with %c. If %C
-						is used ABCD has to be blacklisted.
+						Defines a list of event ID patterns to be blocked. The
+						items of this list are only matched against %c, %C, %d,
+						%x and %X of the eventIDPattern description. Year (%Y)
+						and prefix (%p) are not matched. The match is
+						case-sensitive, so 'abcd' would only by blocked in
+						combination with %c. If %C is used, 'ABCD' is matched.
 						</description>
 					</parameter>
 				</group>
@@ -310,21 +330,28 @@
 				</parameter>
 
 				<group name="region">
+					<description>
+					Region filter for creating events. Use with care! Origins
+					outside may be ignored even if they would
+					become preferred otherwise.
+					</description>
 					<parameter name="rect" type = "string" >
 						<description>
-							Region in which scevent is allowed to create Events.
+						Region by geographic coordinates.
+
+						Format: "South, East, North, West"
 						</description>
 					</parameter>
 
 					<parameter name="minDepth" type="double"  unit="km">
 						<description>
-							Minimum depth for which scevent is allowed to create Events.
+						Minimum depth.
 						</description>
 					</parameter>
 
 					<parameter name="maxDepth" type="double" unit="km">
 						<description>
-							Maximum depth for which scevent is allowed to create Events.
+						Maximum depth.
 						</description>
 					</parameter>
 				</group>

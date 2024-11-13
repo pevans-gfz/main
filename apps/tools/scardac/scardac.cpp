@@ -11,10 +11,8 @@
  * https://www.gnu.org/licenses/agpl-3.0.html.                             *
  ***************************************************************************/
 
-#define SEISCOMP_COMPONENT SCARDAC
 
-#define MAX_THREADS 1000
-#define MAX_BATCHSIZE 1000
+#define SEISCOMP_COMPONENT SCARDAC
 
 #include "scardac.h"
 
@@ -31,8 +29,10 @@
 #include <seiscomp/logging/log.h>
 
 #include <ctime>
+#include <functional>
 #include <vector>
 
+#define _T(name) _db->driver()->convertColumnName(name)
 
 using namespace std;
 using namespace Seiscomp::DataModel;
@@ -40,55 +40,74 @@ using namespace Seiscomp::DataModel;
 namespace Seiscomp {
 namespace DataAvailability {
 
-namespace {
+enum { MAX_THREADS = 1000 };
 
-inline
-bool equalsNoUpdated(const DataSegment *s1,
-                     const DataSegment *s2) {
-	return s1->start()      == s2->start() &&
-	       s1->end()        == s2->end() &&
-	       s1->sampleRate() == s2->sampleRate() &&
-	       s1->quality()    == s2->quality() &&
-	       s1->outOfOrder() == s2->outOfOrder();
-}
+namespace {
 
 inline
 bool compareSegmentStart(const DataSegmentPtr &a, const DataSegmentPtr &b) {
 	return a->start() < b->start();
 }
 
+bool readWFIDFile(Collector::WaveformIDs &wids, const string &fileName) {
+	SEISCOMP_INFO("Reading waveform stream IDs from %s",
+	              fileName.c_str());
+	ifstream file(fileName);
+	if ( !file.is_open() ) {
+		SEISCOMP_ERROR("Unable to open waveform stream ID file %s",
+		               fileName.c_str());
+		return false;
+	}
+
+	string line;
+	int lineNum = 0;
+	WaveformStreamID wid;
+	while ( getline(file, line) ) {
+		++lineNum;
+		line.erase(std::remove_if(line.begin(), line.end(), ::isspace),
+		           line.end());
+		if ( line.empty() || line[0] == '#' ) {
+			continue;
+		}
+
+		if ( !wfID(wid, line) ) {
+			SEISCOMP_ERROR("Invalid line #%i in waveform stream ID "
+			               "file %s",
+			               lineNum, fileName.c_str());
+			return false;
+		}
+
+		if ( wids.find(line) != wids.end() ) {
+			SEISCOMP_DEBUG("Ignoring duplicated line #i in waveform "
+			               "stream ID file", lineNum);
+			continue;
+		}
+
+		wids[line] = wid;
+	}
+
+	file.close();
+
+	return true;
+}
+
 inline
-void updateExtent(DataExtent &ext, const DataSegment *seg) {
-	// first segment: update extent start time
-	if ( !ext.start() )
-		ext.setStart(seg->start());
-
-	// check for last end time which is not necessarily to be found
-	// in last segment of last chunk
-	if ( seg->end() > ext.end() )
-		ext.setEnd(seg->end());
-
-	DataAttributeExtent *attExt = ext.dataAttributeExtent(
-	    DataAttributeExtentIndex(seg->sampleRate(), seg->quality()));
-	if ( attExt == NULL ) {
-		attExt = new DataAttributeExtent();
-		attExt->setSampleRate(seg->sampleRate());
-		attExt->setQuality(seg->quality());
-		attExt->setStart(seg->start());
-		attExt->setEnd(seg->end());
-		attExt->setUpdated(seg->updated());
-		attExt->setSegmentCount(1);
-		ext.add(attExt);
+bool parseDate(OPT(Core::Time) &time, const string &timeStr, const char *desc) {
+	double daysAgo;
+	if ( Core::fromString(daysAgo, timeStr) ) {
+		time = Core::Time::UTC() - Core::TimeSpan(daysAgo * 86400.0);
 	}
 	else {
-		// update of start time not necessary since segments are process in
-		// sequential order in respect to their start time
-		if ( seg->end() > attExt->end() )
-			attExt->setEnd(seg->end());
-		if ( seg->updated() > attExt->updated() )
-			attExt->setUpdated(seg->updated());
-		attExt->setSegmentCount(attExt->segmentCount() + 1);
+		time = Core::Time();
+		if ( !Core::fromString(*time, timeStr) ) {
+			SEISCOMP_ERROR("Invalid %s time value, expected time span in days "
+			               "(float) before now or date "
+			               "(YYYY-mm-dd['T'HH:MM:SS])", desc);
+			return false;
+		}
 	}
+
+	return true;
 }
 
 } // ns anonymous
@@ -99,7 +118,7 @@ void updateExtent(DataExtent &ext, const DataSegment *seg) {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 Worker::Worker(const SCARDAC *app, int id, Collector *collector)
-: _app(app), _id(id), _collector(collector), _extent(NULL) {}
+: _app(app), _id(id), _collector(collector) {}
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 
@@ -107,179 +126,319 @@ Worker::Worker(const SCARDAC *app, int id, Collector *collector)
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void Worker::processExtent(DataExtent *extent, bool foundInDB) {
-	if ( extent == NULL ) return;
+	if ( !extent ) {
+		return;
+	}
 
-	const WaveformStreamID &wid = extent->waveformID();
-
+	// reset processExtent variables
 	_extent = extent;
-	_sid = streamID(wid);
+	_extentOID = IO::DatabaseInterface::INVALID_OID;
+	_sid = streamID(extent->waveformID());
+	_segmentOverflow = false;
+	_segCount = 0;
+	_segmentsStore.clear();
 	_segmentsRemove.clear();
-	_segmentsAdd.clear();
-	_currentSegment = NULL;
 
-//	vector<DataAttributeExtentIndex> attributeIndices;
-
-	SEISCOMP_INFO("[%i] %s: start processing", _id, _sid.c_str());
+	SEISCOMP_INFO("[%i] %s: Start processing", _id, _sid.c_str());
 	Collector::DataChunks chunks;
 	_collector->collectChunks(chunks, _extent->waveformID());
 
 	if ( chunks.empty() ) {
-		SEISCOMP_INFO("[%i] %s: found no data chunks", _id, _sid.c_str());
+		SEISCOMP_INFO("[%i] %s: Found no data chunks", _id, _sid.c_str());
 	}
 	else {
-		SEISCOMP_INFO("[%i] %s: found %lu data chunks", _id, _sid.c_str(),
-		              static_cast<unsigned long>(chunks.size()));
-		SEISCOMP_DEBUG("[%i] %s: first: %s", _id, _sid.c_str(),
+		SEISCOMP_INFO("[%i] %s: Found %zu data chunks", _id, _sid.c_str(),
+		              chunks.size());
+		SEISCOMP_DEBUG("[%i] %s: First: %s", _id, _sid.c_str(),
 		               chunks.front().c_str());
-		SEISCOMP_DEBUG("[%i] %s: last : %s", _id, _sid.c_str(),
+		SEISCOMP_DEBUG("[%i] %s: Last : %s", _id, _sid.c_str(),
 		               chunks.back().c_str());
 	}
 
+	// database segment iterator, limited by scan window (if any)
 	DatabaseIterator db_seg_it;
+
 	// check if extent exists
 	if ( foundInDB ) {
 		// query existing segments
-		if ( ! dbConnect(_dbRead, "read") ) {
-			SEISCOMP_ERROR("[%i] %s: could not query existing attribute "
+		if ( !dbConnect() ) {
+			SEISCOMP_ERROR("[%i] %s: Could not query existing attribute "
 			               "extents and data segments", _id, _sid.c_str());
 			return;
 		}
 
-		// load existing data attribute extents and segments
-		_dbRead->loadDataAttributeExtents(_extent);
-		db_seg_it = dbSegments();
-	}
-	else if ( ! writeExtent(OP_ADD) )
-		return;
+		// load existing data attribute extents
+		_db->loadDataAttributeExtents(_extent);
 
-	Core::Time now = Core::Time::GMT();
-	DataExtent scanExt("tmp_" + _sid);
+		// query existing segments within requested time window, count segments
+		// outside time window
+		_extentOID = _db->getCachedId(_extent);
+		if ( _extentOID != IO::DatabaseInterface::INVALID_OID ) {
+			db_seg_it = dbSegments(_segCount);
+		}
+		SEISCOMP_DEBUG("[%i] %s: Found existing extent\n"
+		               "  start            : %s\n"
+		               "  end              : %s\n"
+		               "  updated          : %s\n"
+		               "  last scan        : %s\n"
+		               "  attribute extents: %zu\n"
+		               "  segment overflow : %i",
+		               _id, _sid.c_str(), extent->start().iso(),
+		               extent->end().iso(), extent->updated().iso(),
+		               extent->lastScan().iso(),
+		               extent->dataAttributeExtentCount(),
+		               extent->segmentOverflow());
+	}
+	else if ( writeExtent(OP_ADD) ) {
+		_extentOID = _db->getCachedId(_extent);
+	}
+	else {
+		SEISCOMP_ERROR("[%i] %s: Could not create new extent",
+		               _id, _sid.c_str());
+		return;
+	}
+
+	if ( _extentOID == IO::DatabaseInterface::INVALID_OID ) {
+		SEISCOMP_ERROR("[%i] %s: Could not read extent _oid", _id, _sid.c_str());
+		return;
+	}
+
+	auto now = Core::Time::UTC();
+	auto mtime = now;
+	Segments segments;
+	Core::TimeWindow chunkWindow;
+	Core::TimeWindow nextChunkWindow;
+	OPT(Core::Time) chunkSeqEndTime;
+	OPT(Core::Time) prevChunkEndTime;
+	DataSegmentPtr dbSeg = nullptr;
+	DataSegmentPtr prevChunkSeg = nullptr;
+	string readTrigger;
+
+	if ( _app->_startTime ) {
+		prevChunkEndTime = *_app->_startTime;
+	}
 
 	// iterate over all stream chunks
-	Segments segments;
-	size_t segCount = 0;
-	Core::TimeWindow chunkWindow;
-	for ( const auto &chunk : chunks ) {
-		if ( _app->_exitRequested || scanExt.segmentOverflow() ) {
+	for ( auto chunk = chunks.cbegin(), nextChunk = chunks.cbegin();
+	      chunk != chunks.cend(); ++chunk ) {
+		if ( _app->_exitRequested || _segmentOverflow ) {
 			break;
 		}
 
-		if ( !_collector->chunkTimeWindow(chunkWindow, chunk) ) {
-			SEISCOMP_WARNING("[%i] %s: invalid chunk time window, skipping: %s",
-			                 _id, _sid.c_str(), chunk.c_str() );
+		nextChunkWindow = {};
+		readTrigger = !foundInDB ? "new extent" :
+		              _app->_deepScan ? "deep-scan" : "";
+		nextChunk = next(chunk);
+
+		if ( nextChunk != chunks.end() ) {
+			if ( !_collector->chunkTimeWindow(nextChunkWindow, *nextChunk) ) {
+				nextChunkWindow = {};
+			}
+		}
+
+		// update previous chunk end time
+		if ( chunkWindow ) {
+			prevChunkEndTime = chunkWindow.endTime();
+		}
+
+		// request time window of current chunk
+		if ( !_collector->chunkTimeWindow(chunkWindow, *chunk) ) {
+			SEISCOMP_WARNING("[%i] %s: Invalid chunk time window, skipping: %s",
+			                 _id, _sid.c_str(), chunk->c_str());
+			chunkWindow = {};
 			continue;
 		}
 
-		Core::Time mtime = _collector->chunkMTime(chunk);
-		if ( !mtime ) mtime = now;
-		if ( mtime > scanExt.updated() ) scanExt.setUpdated(mtime);
-
-		// check if chunk was modified since last scan
-		if ( false ) { /*!_app->_deepScan && _extent->lastScan() && mtime <= _extent->lastScan() ) {
-			// chunk not modified since last scan, advance db iterator to segment
-			// containing end time of chunk
-			Core::Time chunkEnd = chunkStart + TimeSpan(86400, 0);
-			for ( ; *seg_it && !_app->_exitRequested; ++seg_it ) {
-				DataSegment s = DataSegment::Cast(*dbSegIt);
-				if ( ! s )
-					continue;
-				if ( s->start() <= chunkEnd ) {
-					dbSegment = s;
-				}
-				else
-					break;
-			}*/
+		// request modification time of current chunk
+		mtime = _collector->chunkMTime(*chunk);
+		if ( !mtime ) {
+			mtime = now;
 		}
-		else {
-			if ( !readChunkSegments(segments, chunk, mtime, chunkWindow) )
-				continue;
 
-			// process chunk segments with the exception of the last element
-			// which might be extended later on by records of the next data
-			// chunk
-			for ( auto it = segments.cbegin(),
-			      last = --segments.cend(); it != segments.cend(); ++it ) {
-				if ( _app->_exitRequested ) return;
-
-				// check for segment overflow
-				if ( _app->_maxSegments >= 0 &&
-				     !scanExt.segmentOverflow() &&
-				     segCount >= (unsigned long)_app->_maxSegments ) {
-					scanExt.setSegmentOverflow(true);
-					SEISCOMP_WARNING("[%i] %s: segment overflow detected",
-					                 _id, _sid.c_str());
-				}
-
-				_currentSegment = *it;
-
-				if ( it == last ) break;
-
-				++segCount;
-
-				// update extent and attribute extent boundaries
-				updateExtent(scanExt, _currentSegment.get());
-
-				// remove database segments no longer found in chunk
-				if ( !scanExt.segmentOverflow() &&
-				     !findDBSegment(db_seg_it, _currentSegment.get() ) ) {
-					addSegment(_currentSegment);
-				}
+		if ( readTrigger.empty() && (
+		         !_app->_mtimeEnd || mtime <= _app->_mtimeEnd) ) {
+			if ( _app->_mtimeStart && mtime >= _app->_mtimeStart ) {
+				readTrigger = "mtime > modified since";
+			}
+			else if ( mtime > _extent->lastScan() ) {
+				readTrigger = "mtime > last scan";
 			}
 		}
-	}
 
-	// process last segment
-	if ( _currentSegment && !scanExt.segmentOverflow() ) {
-		// update extent and attribute extent boundaries
-		updateExtent(scanExt, _currentSegment.get());
+		// first chunk and no start time given or chunk gap
+		// - remove all DB segments starting before current chunk
+		// - force scan if segments overlapping chunk start time were found
+		if ( !prevChunkEndTime || chunkWindow.startTime() > prevChunkEndTime) {
+			if ( prevChunkEndTime) {
+				SEISCOMP_DEBUG("[%i] %s: Detected chunk gap: %s ~ %s",
+				               _id, _sid.c_str(), prevChunkEndTime->iso().c_str(),
+				               chunkWindow.startTime().iso().c_str());
+				// trigger read if previous DB segment was overlapping
+				// chunkWindow startTime
+				if ( readTrigger.empty() && dbSeg &&
+				     dbSeg->end() > chunkWindow.startTime() ) {
+					readTrigger = "new chunk gap";
+				}
+			}
 
-		// remove database segments no longer found in chunk
-		if ( !scanExt.segmentOverflow() &&
-		     !findDBSegment(db_seg_it, _currentSegment.get()) ) {
-			addSegment(_currentSegment);
+			for ( ; !_app->_exitRequested && *db_seg_it; ++db_seg_it ) {
+				dbSeg = DataSegment::Cast(*db_seg_it);
+				if ( dbSeg->start() >= chunkWindow.startTime() ) {
+					break;
+				}
+
+				if ( dbSeg->end() > chunkWindow.startTime() &&
+				     readTrigger.empty()) {
+					readTrigger = "db segment overlapping chunk start time";
+				}
+				SEISCOMP_DEBUG("[%i] %s: Remove DB segment [%s~%s] "
+				               "(overlapping chunk start time)", _id,
+				               _sid.c_str(), dbSeg->start().iso(),
+				               dbSeg->end().iso());
+				_segmentsRemove.push_back(dbSeg);
+			}
+		}
+		else if ( readTrigger.empty() && nextChunkWindow &&
+		          chunkWindow.endTime() != nextChunkWindow.startTime() ) {
+			readTrigger = "chunk gap ahead";
+		}
+
+		// chunk unchanged and scan not forced otherwise
+		if ( readTrigger.empty() ) {
+			SEISCOMP_DEBUG("[%i] %s: Skipping chunk (mtime of %s %s): %s",
+			               _id, _sid.c_str(), mtime.iso().c_str(),
+			               _app->_mtimeEnd && mtime > _app->_mtimeEnd ?
+			                   "> mtime window" :
+			               _app->_mtimeStart ? "< mtime window" : "< last scan",
+			               chunk->c_str());
+
+			// previous chunk was read and last segment was not committed yet
+			if ( prevChunkSeg ) {
+				diffSegment(db_seg_it, prevChunkSeg.get(), true);
+				prevChunkSeg = nullptr;
+			}
+
+			// advance database segment iterator to current chunk's end time
+			for ( ; !_app->_exitRequested && *db_seg_it; ++db_seg_it ) {
+				dbSeg = DataSegment::Cast(*db_seg_it);
+
+				if ( dbSeg->end() >= chunkWindow.endTime() ) {
+					break;
+				}
+
+				++_segCount;
+			}
+
+			continue;
+		}
+
+		// read segments from chunk
+		SEISCOMP_DEBUG("[%i] %s: Reading chunk (%s): %s",
+		               _id, _sid.c_str(), readTrigger.c_str(),
+		               chunk->c_str());
+		if ( !readChunkSegments(segments, *chunk, prevChunkSeg, mtime,
+		                        chunkWindow) ) {
+			// TODO: Truncate DB segment to window start time
+			continue;
+		}
+
+		// process chunk segments
+		for ( auto it = segments.cbegin(), last = --segments.cend();
+		      it != segments.cend() && !_app->_exitRequested; ++it ) {
+
+			// check segment overflow
+			if ( _app->_maxSegments && !_segmentOverflow &&
+			     _segCount > _app->_maxSegments ) {
+				_segmentOverflow = true;
+				SEISCOMP_WARNING("[%i] %s: Segment overflow detected, new "
+				                 "segments will no longer be added to the "
+				                 "database", _id, _sid.c_str());
+				break;
+			}
+
+			auto seg = *it;
+
+			if ( _app->_endTime && seg->start() >= _app->_endTime ) {
+				SEISCOMP_DEBUG("[%i] %s: Abort scan, chunk segment [%s~%s] "
+				               "behind end time", _id, _sid.c_str(),
+				               seg->start().iso(), seg->end().iso());
+				break;
+			}
+
+			if ( _app->_startTime && seg->end() < _app->_startTime ) {
+				SEISCOMP_DEBUG("[%i] %s: Skipping chunk segment [%s~%s] "
+				               "before start time", _id, _sid.c_str(),
+				               seg->start().iso(), seg->end().iso());
+				continue;
+			}
+
+			// first segment of current chunk and previous chunk not read:
+			// check if chunk segment can be joined with DB segment
+			if ( !prevChunkSeg && *db_seg_it ) {
+				//double jitter = _app->_jitter / seg->sampleRate();
+				auto segStartJitter = seg->start();// + Core::TimeSpan(jitter);
+				dbSeg = DataSegment::Cast(*db_seg_it);
+				if ( dbSeg->end() < segStartJitter ) {
+					++db_seg_it;
+					++_segCount;
+				}
+				else if ( dbSeg->start() < segStartJitter &&
+				          dbSeg->sampleRate() == seg->sampleRate() &&
+				          dbSeg->quality()    == seg->quality() ) {
+					SEISCOMP_DEBUG("[%i] %s: Join DB segment [%s~%s] with "
+					               "first chunk segment [%s~%s]", _id,
+					               _sid.c_str(),
+					               dbSeg->start().iso(), dbSeg->end().iso(),
+					               seg->start().iso(), seg->end().iso());
+					seg->setStart(dbSeg->start());
+					if ( dbSeg->end() > seg->end() ) {
+						seg->setEnd(dbSeg->end());
+					}
+					if ( dbSeg->updated() > seg->updated() ) {
+						seg->setUpdated(dbSeg->updated());
+					}
+
+					_segmentsRemove.push_back(dbSeg);
+					++db_seg_it;
+				}
+			}
+			prevChunkSeg = nullptr;
+
+			// skip last segment if it might be extended by records of the next
+			// data chunk
+			if ( it == last && nextChunkWindow ) {
+				// commit last segment if it ends before next chunk window
+				double jitter = _app->_jitter / seg->sampleRate();
+				if ( (nextChunkWindow.startTime() - seg->end()).length() < jitter ) {
+					prevChunkSeg = seg;
+					break;
+				}
+			}
+
+			dbSeg = DataSegment::Cast(*db_seg_it);
+
+			// diff database segments up to current chunk segment
+			diffSegment(db_seg_it, it->get());
 		}
 	}
 
 	// remove trailing database segments
 	for ( ; !_app->_exitRequested && *db_seg_it; ++db_seg_it ) {
-		DataSegmentPtr dbSeg = DataSegment::Cast(*db_seg_it);
-		dbSeg->setParent(_extent);
-		removeSegment(dbSeg);
-	}
-	flushSegmentBuffers();
+		dbSeg = DataSegment::Cast(*db_seg_it);
 
-	// sync attribute extents with database
-	syncAttributeExtents(scanExt);
-
-	// update extent
-	if ( _currentSegment ) {
-		_extent->setLastScan(now);
-		bool extentModified = false;
-		if ( _extent->start() != scanExt.start() || _extent->end() != scanExt.end() ||
-		     _extent->updated() != scanExt.updated() ||
-		     _extent->segmentOverflow() != _extent->segmentOverflow() ) {
-			_extent->setStart(scanExt.start());
-			_extent->setEnd(scanExt.end());
-			_extent->setUpdated(scanExt.updated());
-			_extent->setSegmentOverflow(scanExt.segmentOverflow());
-			extentModified = true;
-		}
-
-		if ( writeExtent(OP_UPDATE) ) {
-			SEISCOMP_INFO("[%i] %s: extent %s: %s ~ %s", _id, _sid.c_str(),
-			              string(extentModified?"modified":"unchanged").c_str(),
-			              _extent->start().iso().c_str(),
-			              _extent->end().iso().c_str());
-		}
-	}
-	else {
-		// no segments found, remove entire extent and all attribute extents
-		if ( writeExtent(OP_REMOVE) ) {
-			SEISCOMP_INFO("[%i] %s: extent removed", _id, _sid.c_str());
-		}
+		SEISCOMP_DEBUG("[%i] %s: Remove DB segment [%s~%s] (trailing last "
+		               "chunk)", _id, _sid.c_str(), dbSeg->start().iso(),
+		               dbSeg->end().iso());
+		_segmentsRemove.push_back(dbSeg);
 	}
 
 	db_seg_it.close();
+
+	if ( syncSegments() ) {
+		// update extent's last scan time
+		_extent->setLastScan(now);
+		syncExtent();
+	}
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -287,24 +446,28 @@ void Worker::processExtent(DataExtent *extent, bool foundInDB) {
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-bool Worker::dbConnect(DatabaseReaderPtr &db, const char *info) {
-	while ( ! _app->_exitRequested && ( !db || !db->driver()->isConnected() ) ) {
-		SEISCOMP_DEBUG("[%i] initializing database %s connection", _id, info);
+bool Worker::dbConnect() {
+	while ( !_app->_exitRequested &&
+	        ( !_db || !_db->driver()->isConnected() ) ) {
+		SEISCOMP_DEBUG("[%i] Initializing database connection", _id);
 		IO::DatabaseInterfacePtr dbInterface =
 		        IO::DatabaseInterface::Open(_app->databaseURI().c_str());
 		if ( dbInterface ) {
-			db = new DatabaseReader(dbInterface.get());
+			_db = new DatabaseReader(dbInterface.get());
 		}
 		else {
-			SEISCOMP_DEBUG("[%i] trying to reconnect in 5s", _id);
-			for ( int i = 0; i < 5 && ! _app->_exitRequested; ++i )
+			SEISCOMP_DEBUG("[%i] Trying to reconnect in 5s", _id);
+			for ( int i = 0; i < 5 && !_app->_exitRequested; ++i ) {
 				sleep(1);
+			}
 		}
 	}
-	if ( db && db->driver()->isConnected() )
-		return true;
 
-	SEISCOMP_ERROR("[%i] could not initializing database %s connection", _id, info);
+	if ( _db && _db->driver()->isConnected() ) {
+		return true;
+	}
+
+	SEISCOMP_ERROR("[%i] Could not initialize database connection", _id);
 	return false;
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -313,18 +476,54 @@ bool Worker::dbConnect(DatabaseReaderPtr &db, const char *info) {
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-#define _T(name) _dbRead->driver()->convertColumnName(name)
-DatabaseIterator Worker::dbSegments() {
+DatabaseIterator Worker::dbSegments(size_t &segmentsOutside) {
 	std::ostringstream oss;
-	oss << "SELECT DataSegment.* "
-	       "FROM DataSegment, PublicObject AS PDataExtent "
-	    << "WHERE PDataExtent." << _T("publicID") << "='"
-	    <<     _dbRead->toString(_extent->publicID()) << "' AND "
-	           "DataSegment._parent_oid=PDataExtent._oid "
-	       "ORDER BY DataSegment." << _T("start") << " ASC, "
-	                "DataSegment." << _T("start_ms") << " ASC";
+	segmentsOutside = 0;
+	auto *db = _db->driver();
 
-	return _dbRead->getObjectIterator(oss.str(), DataSegment::TypeInfo());
+	// if the data collection is restricted by time, then query the number of
+	// segments lying outside the requested time window
+	if ( _app->_startTime || _app->_endTime ) {
+		oss << "SELECT COUNT(*) "
+		       "FROM DataSegment "
+		       "WHERE _parent_oid = " << _extentOID;
+		if ( _app->_startTime ) {
+			oss << " AND " << _T("end") << " <= '" <<
+			       db->timeToString(*_app->_startTime) << "'";
+		}
+		if ( _app->_endTime ) {
+			oss << " AND " << _T("start") << " > '" <<
+			      db->timeToString(*_app->_endTime) << "'";
+		}
+
+		if ( !db->beginQuery(oss.str().c_str()) ||
+		     !db->fetchRow() ||
+		     !Seiscomp::Core::fromString(segmentsOutside,
+		                                 static_cast<const char*>(
+		                                         db->getRowField(0))) ) {
+			SEISCOMP_WARNING("[%i] %s: Could not query number of segments "
+			                 "outside time window", _id, _sid.c_str());
+		}
+		db->endQuery();
+
+		oss.str("");
+	}
+
+	oss << "SELECT * "
+	       "FROM DataSegment "
+	       "WHERE _parent_oid = " << _extentOID;
+	if ( _app->_startTime ) {
+		oss << " AND " << _T("end") << " > '" <<
+		       _db->driver()->timeToString(*_app->_startTime) << "'";
+	}
+	if ( _app->_endTime ) {
+		oss << " AND " << _T("start") << " <= '" <<
+		       _db->driver()->timeToString(*_app->_endTime) << "'";
+	}
+	oss << " ORDER BY " << _T("start") << " ASC, "
+	                    << _T("start_ms") << " ASC";
+
+	return _db->getObjectIterator(oss.str(), DataSegment::TypeInfo());
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -333,20 +532,22 @@ DatabaseIterator Worker::dbSegments() {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool Worker::readChunkSegments(Segments &segments, const std::string &chunk,
+                               DataModel::DataSegmentPtr chunkSeg,
                                const Core::Time &mtime,
                                const Core::TimeWindow &window) {
 	segments.clear();
 
-	Collector::RecordIteratorPtr it;
+	Collector::RecordIteratorPtr rec;
 	try {
-		it = _collector->begin(chunk, _extent->waveformID());
+		rec = _collector->begin(chunk, _extent->waveformID());
 	} catch ( CollectorException &e) {
 		SEISCOMP_WARNING("[%i] %s: %s: %s",
 		                 _id, _sid.c_str(), chunk.c_str(), e.what());
 		return false;
 	}
 
-	DataSegmentPtr segment = _currentSegment;
+	DataModel::DataSegmentPtr segment = chunkSeg;
+	double jitter = segment ? _app->_jitter / segment->sampleRate() : 0;
 
 	uint32_t records         = 0;
 	uint32_t gaps            = 0;
@@ -356,150 +557,146 @@ bool Worker::readChunkSegments(Segments &segments, const std::string &chunk,
 	uint32_t qualityChanges  = 0;
 	double availability      = 0; // in seconds
 
-	while ( it->next() && !_app->_exitRequested ) {
+	while ( rec->next() && !_app->_exitRequested ) {
 		// assert valid sampling rate
-		if ( it->sampleRate() <= 0 ) {
+		if ( rec->sampleRate() <= 0 ) {
 			++records;
-			SEISCOMP_WARNING("[%i] %s: invalid sampling rate in record #%i",
+			SEISCOMP_WARNING("[%i] %s: Invalid sampling rate in record #%i",
 			                 _id, _sid.c_str(), records);
 			continue;
 		}
 
-		// set time jitter to half of sample time
-		double jitter = _app->_jitter / it->sampleRate();
-
 		// check if record can be merged with current segment
-		bool merge = false;
+		auto merge = false;
 		if ( segment ) {
 			// gap
-			if ( (it->startTime() - segment->end()).length() > jitter ) {
+			if ( (rec->startTime() - segment->end()).length() > jitter ) {
 				++gaps;
-				SEISCOMP_DEBUG("[%i] %s: detected gap: %s ~ %s (%.1fs)",
+				SEISCOMP_DEBUG("[%i] %s: Detected gap: %s ~ %s (%.1fs)",
 				               _id, _sid.c_str(),
 				               segment->end().iso().c_str(),
-				               it->startTime().iso().c_str(),
-				               (it->startTime() - segment->end()).length());
+				               rec->startTime().iso().c_str(),
+				               (rec->startTime() - segment->end()).length());
 			}
 			// overlap
-			else if ( (segment->end() - it->startTime()).length() > jitter ) {
+			else if ( (segment->end() - rec->startTime()).length() > jitter ) {
 				++overlaps;
-				SEISCOMP_DEBUG("[%i] %s: detected overlap: %s ~ %s (%.1fs)",
-				               _id, _sid.c_str(), it->startTime().iso().c_str(),
+				SEISCOMP_DEBUG("[%i] %s: Detected overlap: %s ~ %s (%.1fs)",
+				               _id, _sid.c_str(), rec->startTime().iso().c_str(),
 				               segment->end().iso().c_str(),
-				               (segment->end() - it->startTime()).length());
+				               (segment->end() - rec->startTime()).length());
 			}
 			else {
 				merge = true;
 			}
 
 			// sampling rate change
-			if ( segment->sampleRate() != it->sampleRate() ) {
+			if ( segment->sampleRate() != rec->sampleRate() ) {
 				++rateChanges;
-				SEISCOMP_DEBUG("[%i] %s: detected change of sampling rate at "
+				SEISCOMP_DEBUG("[%i] %s: Detected change of sampling rate at "
 				               "%s: %.1f -> %.1f", _id, _sid.c_str(),
-				               it->startTime().iso().c_str(),
-				               segment->sampleRate(), it->sampleRate());
+				               rec->startTime().iso().c_str(),
+				               segment->sampleRate(), rec->sampleRate());
 				merge = false;
 			}
 
 			// quality change
-			if ( segment->quality() != it->quality() ) {
+			if ( segment->quality() != rec->quality() ) {
 				++qualityChanges;
-				SEISCOMP_DEBUG("[%i] %s: detected change of quality at %s "
+				SEISCOMP_DEBUG("[%i] %s: Detected change of quality at %s "
 				               "%s -> %s", _id, _sid.c_str(),
-				               it->startTime().iso().c_str(),
+				               rec->startTime().iso().c_str(),
 				               segment->quality().c_str(),
-				               it->quality().c_str());
+				               rec->quality().c_str());
 				merge = false;
 			}
 		}
 
 		if ( merge ) {
-			// check if first record is merged with segment of previous chunk:
-			// update time if this chunk's mtime is greater the segment mtime
-			if ( records == 0 && mtime > segment->updated() )
+			// first record of current chunk is merged with segment of previous
+			// chunk
+			if ( records == 0 && mtime > segment->updated() ) {
 				segment->setUpdated(mtime);
-			segment->setEnd(it->endTime());
+			}
+			segment->setEnd(rec->endTime());
 		}
 		else {
-			bool ooo = false;
+			auto ooo = false;
 			if ( segment ) {
-				segments.push_back(segment.get());
-				if ( it->startTime() < segment->start() ) {
+				segments.emplace_back(segment.get());
+				if ( rec->startTime() < segment->start() ) {
 					ooo = true;
 					++outOfOrder;
 				}
 			}
 			segment = new DataSegment();
-			segment->setStart(it->startTime());
-			segment->setEnd(it->endTime());
+			segment->setStart(rec->startTime());
+			segment->setEnd(rec->endTime());
 			segment->setUpdated(mtime);
-			segment->setSampleRate(it->sampleRate());
-			segment->setQuality(it->quality());
+			segment->setSampleRate(rec->sampleRate());
+			segment->setQuality(rec->quality());
 			segment->setOutOfOrder(ooo);
-			segment->setParent(_extent);
+			jitter = _app->_jitter / rec->sampleRate();
 		}
 
-		records += 1;
-		availability += (it->endTime() - it->startTime()).length();
+		++records;
+		availability += (rec->endTime() - rec->startTime()).length();
 //		SEISCOMP_DEBUG("%s - %s (%.3fs)", it->startTime().iso().c_str(),
 //		               it->endTime().iso().c_str(),
 //		               (it->endTime() - it->startTime()).length());
 	}
 
-	// save last segment
-	if ( segment ) {
-		segments.push_back(segment.get());
-
-		// sort segment vector according start time if out of order data
-		// was detected
-		if ( outOfOrder > 0 ) {
-			sort(segments.begin(), segments.end(), compareSegmentStart);
-		}
-
-		// check segments for duplicated start time, keep segment with largest
-		// time window
-		uint32_t dropped = 0;
-		Segments::iterator it = segments.begin();
-		Segments::iterator last = it++;
-		while ( it != segments.end() ) {
-			if ( (*it)->start() != (*last)->start() ) {
-				++it; ++last;
-				continue;
-			}
-
-			SEISCOMP_DEBUG("[%i] %s: dropping segment with duplicated start "
-			                "time: %s", _id, _sid.c_str(),
-			                (*it)->start().iso().c_str());
-			segments.erase((*it)->end() > (*last)->end() ? last : it );
-			++dropped;
-		}
-
-		SEISCOMP_DEBUG("[%i] %s: %s, results:\n"
-		               "  time window          : %s ~ %s (%.1fs)\n"
-		               "  modification time    : %s\n"
-		               "  segments             : %lu\n"
-		               "  gaps                 : %i\n"
-		               "  overlaps             : %i\n"
-		               "  out of order segments: %i\n"
-		               "  dropped segments     : %i\n"
-		               "  sampling rate changes: %i\n"
-		               "  quality changes      : %i\n"
-		               "  records              : %i\n"
-		               "  availability         : %.2f%% (%.1fs)",
-		               _id, _sid.c_str(), chunk.c_str(),
-		               window.startTime().iso().c_str(),
-		               window.endTime().iso().c_str(), window.length(),
-		               mtime.iso().c_str(), (unsigned long)segments.size(),
-		               gaps, overlaps, outOfOrder, dropped, rateChanges,
-		               qualityChanges, records,
-		               availability/window.length()*100.0, availability);
-	}
-	else {
-		SEISCOMP_WARNING("[%i] %s: found no data in chunk: %s ", _id,
+	if ( !records ) {
+		SEISCOMP_WARNING("[%i] %s: Found no data in chunk: %s ", _id,
 		                 _sid.c_str(), chunk.c_str());
 		return false;
 	}
+
+	segments.emplace_back(segment.get());
+
+	// sort segment vector according start time if out of order data
+	// was detected
+	if ( outOfOrder > 0 ) {
+		sort(segments.begin(), segments.end(), compareSegmentStart);
+	}
+
+	// check segments for duplicated start time, keep segment with largest
+	// time window
+	uint32_t dropped = 0;
+	auto seg = segments.begin();
+	auto last = seg++;
+	while ( seg != segments.end() ) {
+		if ( (*seg)->start() != (*last)->start() ) {
+			++seg;
+			++last;
+			continue;
+		}
+
+		SEISCOMP_DEBUG("[%i] %s: Dropping segment with duplicated start "
+		               "time: %s", _id, _sid.c_str(),
+		               (*seg)->start().iso().c_str());
+		segments.erase((*seg)->end() > (*last)->end() ? last : seg );
+		++dropped;
+	}
+
+	SEISCOMP_DEBUG("[%i] %s: %s, Results:\n"
+	               "  time window          : %s ~ %s (%.1fs)\n"
+	               "  modification time    : %s\n"
+	               "  segments             : %zu\n"
+	               "  gaps                 : %i\n"
+	               "  overlaps             : %i\n"
+	               "  out of order segments: %i\n"
+	               "  dropped segments     : %i\n"
+	               "  sampling rate changes: %i\n"
+	               "  quality changes      : %i\n"
+	               "  records              : %i\n"
+	               "  availability         : %.2f%% (%.1fs)",
+	               _id, _sid.c_str(), chunk.c_str(),
+	               window.startTime().iso().c_str(),
+	               window.endTime().iso().c_str(), window.length(),
+	               mtime.iso().c_str(), segments.size(), gaps, overlaps,
+	               outOfOrder, dropped, rateChanges, qualityChanges, records,
+	               availability/window.length()*100.0, availability);
 
 	return true;
 }
@@ -509,89 +706,94 @@ bool Worker::readChunkSegments(Segments &segments, const std::string &chunk,
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-bool Worker::findDBSegment(DatabaseIterator &it, const DataSegment *segment) {
-	if ( !segment || !*it ) return false;
+void Worker::diffSegment(DatabaseIterator &db_seg_it, DataSegment *chunkSeg,
+                         bool extent) {
+	for ( ; !_app->_exitRequested && *db_seg_it; ++db_seg_it ) {
+		DataSegmentPtr dbSeg = DataSegment::Cast(*db_seg_it);
 
-	for ( ; !_app->_exitRequested && *it; ++it ) {
-		DataSegmentPtr dbSeg = DataSegment::Cast(*it);
-		if ( dbSeg->start() > segment->start() )
-			break;
-		if ( equalsNoUpdated(dbSeg.get(), segment) ) {
-			++it;
-			return true;
+		// new segment
+		if ( dbSeg->start() > chunkSeg->start() ) {
+			++_segCount;
+
+			// check if chunk segment can be merged into database segment
+			if ( extent &&
+			     dbSeg->sampleRate() == chunkSeg->sampleRate() &&
+			     dbSeg->quality() == chunkSeg->quality() ) {
+				double jitter = _app->_jitter / chunkSeg->sampleRate();
+				if ( abs((dbSeg->start() - chunkSeg->end()).length()) < jitter ) {
+					SEISCOMP_DEBUG("[%i] %s: Join chunk segment [%s~%s] with "
+					               "DB segment [%s~%s]", _id, _sid.c_str(),
+					               chunkSeg->start().iso(),
+					               chunkSeg->end().iso(), dbSeg->start().iso(),
+					               dbSeg->end().iso());
+					chunkSeg->setEnd(dbSeg->end());
+					if ( dbSeg->updated() > chunkSeg->updated() ) {
+						chunkSeg->setUpdated(chunkSeg->updated());
+					}
+					if ( dbSeg->outOfOrder() ) {
+						chunkSeg->setOutOfOrder(true);
+					}
+
+					_segmentsRemove.push_back(dbSeg);
+					_segmentsStore.emplace_back(chunkSeg);
+					++_segCount;
+					++db_seg_it;
+					return;
+				}
+			}
+
+			SEISCOMP_DEBUG("[%i] %s: Add chunk segment [%s~%s] (ahead of DB "
+			               "segment)", _id, _sid.c_str(),
+			               chunkSeg->start().iso(), chunkSeg->end().iso());
+			_segmentsStore.emplace_back(chunkSeg);
+			return;
 		}
 
-		dbSeg->setParent(_extent);
-		removeSegment(dbSeg);
-	}
-
-	return false;
-}
-// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-
-
-
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-void Worker::removeSegment(const DataSegmentPtr &segment){
-	_segmentsRemove.push_back(segment);
-	if ( _segmentsRemove.size() + _segmentsAdd.size() >=
-	     (unsigned long) _app->_batchSize ) {
-		flushSegmentBuffers();
-	}
-}
-// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-
-
-
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-void Worker::addSegment(const DataSegmentPtr &segment) {
-	_segmentsAdd.push_back(segment);
-	if ( _segmentsRemove.size() + _segmentsAdd.size() >=
-	     (unsigned long) _app->_batchSize ) {
-		flushSegmentBuffers();
-	}
-}
-// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-
-
-
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-void Worker::flushSegmentBuffers() {
-	if ( _segmentsRemove.empty() && _segmentsAdd.empty() ) return;
-
-	if ( dbConnect(_dbWrite, "write") ) {
-		_dbWrite->driver()->start();
-
-		for ( Segments::iterator it = _segmentsRemove.begin();
-		      it != _segmentsRemove.end(); ) {
-			if ( _dbWrite->remove(it->get()) )
-				it = _segmentsRemove.erase(it);
-			else
-				++it;
+		// remove database segment
+		if ( dbSeg->start() < chunkSeg->start() ) {
+			SEISCOMP_DEBUG("[%i] %s: Remove DB segment [%s~%s] (ahead of "
+			               "chunk segment)", _id, _sid.c_str(),
+			               dbSeg->start().iso(), dbSeg->end().iso());
+			_segmentsRemove.push_back(dbSeg);
+			continue;
 		}
-		for ( Segments::iterator it = _segmentsAdd.begin();
-		      it != _segmentsAdd.end(); ) {
-			if ( _dbWrite->write(it->get()) )
-				it = _segmentsAdd.erase(it);
-			else
-				++it;
+
+		// same start time: update if modified
+		if ( dbSeg->sampleRate() != chunkSeg->sampleRate() ||
+		     dbSeg->quality() != chunkSeg->quality() ||
+		     dbSeg->outOfOrder() != chunkSeg->outOfOrder() ||
+		     dbSeg->updated() != chunkSeg->updated() ||
+		     dbSeg->end() != chunkSeg->end() ) {
+			SEISCOMP_DEBUG("[%i] %s: Replace DB segment [%s~%s] with "
+			               "chunk segment [%s~%s] (same start time)",
+			               _id, _sid.c_str(),
+			               dbSeg->start().iso(), dbSeg->end().iso(),
+			               chunkSeg->start().iso(), chunkSeg->end().iso());
+			if ( extent ) {
+				if ( dbSeg->end() > chunkSeg->end() ) {
+					chunkSeg->setEnd(dbSeg->end());
+				}
+				if ( dbSeg->updated() > chunkSeg->updated() ) {
+					chunkSeg->setUpdated(dbSeg->updated());
+				}
+				if ( dbSeg->outOfOrder() ) {
+					chunkSeg->setOutOfOrder(true);
+				}
+			}
+			chunkSeg->setParent(_extent);
+			_segmentsStore.emplace_back(chunkSeg);
 		}
-		_dbWrite->driver()->commit();
+		++_segCount;
+		++db_seg_it;
+		return;
 	}
 
-	if ( !_segmentsRemove.empty() ) {
-		SEISCOMP_ERROR("[%i] %s: failed to add %lu segments",
-		               _id, _sid.c_str(), (long unsigned) _segmentsRemove.size());
-		_segmentsRemove.clear();
-	}
-
-	if ( !_segmentsAdd.empty() ) {
-		SEISCOMP_ERROR("[%i] %s: failed to add %lu segments",
-		               _id, _sid.c_str(), (long unsigned) _segmentsAdd.size());
-		_segmentsAdd.clear();
+	if ( !*db_seg_it ) {
+		SEISCOMP_DEBUG("[%i] %s: Add chunk segment [%s~%s] (no DB segment left)",
+		               _id, _sid.c_str(), chunkSeg->start().iso(),
+		               chunkSeg->end().iso());
+		++_segCount;
+		_segmentsStore.emplace_back(chunkSeg);
 	}
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -601,23 +803,21 @@ void Worker::flushSegmentBuffers() {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool Worker::writeExtent(Operation op) {
-	if ( op == OP_UNDEFINED || ! dbConnect(_dbWrite, "write") )
+	if ( op == OP_UNDEFINED || !dbConnect() ) {
 		return false;
+	}
 
-	_dbWrite->driver()->start();
-	if ( ( op == OP_ADD    && ! _dbWrite->write(_extent)  ) ||
-	     ( op == OP_UPDATE && ! _dbWrite->update(_extent) ) ||
-	     ( op == OP_REMOVE && ! _dbWrite->remove(_extent) ) ) {
-		_dbWrite->driver()->rollback();
-		SEISCOMP_ERROR("[%i] %s: could not %s extent: %s", _id, _sid.c_str(),
+	if ( ( op == OP_ADD    && !_db->insert(_extent)  ) ||
+	     ( op == OP_UPDATE && !_db->update(_extent) ) ||
+	     ( op == OP_REMOVE && !_db->remove(_extent) ) ) {
+		SEISCOMP_ERROR("[%i] %s: Could not %s extent: %s", _id, _sid.c_str(),
 		               op.toString(), _extent->publicID().c_str());
 		return false;
 	}
 
-	_dbWrite->driver()->commit();
 	SEISCOMP_DEBUG("[%i] %s: %s extent: %s", _id, _sid.c_str(),
-	               string(op == OP_ADD   ?"added":
-	                      op == OP_UPDATE?"updated":"removed").c_str(),
+	               string(op == OP_ADD   ?"Added":
+	                                      op == OP_UPDATE?"Updated":"Removed").c_str(),
 	               _extent->publicID().c_str());
 	return true;
 }
@@ -627,32 +827,154 @@ bool Worker::writeExtent(Operation op) {
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-bool Worker::syncAttributeExtents(const DataExtent &tmpExt) {
-	if ( ! dbConnect(_dbWrite, "write") )
+bool Worker::syncSegments() {
+	SEISCOMP_INFO("[%i] %s: Synchronizing segments with database (store/"
+	              "remove): %zu/%zu", _id, _sid.c_str(), _segmentsStore.size(),
+	              _segmentsRemove.size());
+
+	if ( _app->_exitRequested || !dbConnect() || !_extent ) {
 		return false;
+	}
 
-	_dbWrite->driver()->start();
+	// remove
+	for ( auto &segment : _segmentsRemove ) {
+		if ( _app->_exitRequested ) {
+			return false;
+		}
 
-	// remove attribute extents no longer existing, update those who have changed
+		segment->setParent(_extent);
+		if ( _db->remove(segment.get()) ) {
+			SEISCOMP_DEBUG("[%i] %s: Removed segment [%s~%s]",
+			               _id, _sid.c_str(), segment->start().iso(),
+			               segment->end().iso());
+		}
+		else {
+			SEISCOMP_ERROR("[%i] %s: Failed to remove segment [%s~%s]",
+			               _id, _sid.c_str(), segment->start().iso(),
+			               segment->end().iso());
+		}
+	}
+
+	// add/update
+	for ( auto &segment : _segmentsStore ) {
+		if ( _app->_exitRequested ) {
+			return false;
+		}
+
+		if ( segment->parent() ) {
+			if ( _db->update(segment.get()) ) {
+				SEISCOMP_DEBUG("[%i] %s: Updated segment [%s~%s]",
+				               _id, _sid.c_str(), segment->start().iso(),
+				               segment->end().iso());
+			}
+			else {
+				SEISCOMP_ERROR("[%i] %s: Failed to update segment [%s~%s]",
+				               _id, _sid.c_str(), segment->start().iso(),
+				               segment->end().iso());
+			}
+		}
+		else {
+			segment->setParent(_extent);
+			if ( _db->insert(segment.get()) ) {
+				SEISCOMP_DEBUG("[%i] %s: Added segment [%s~%s]",
+				               _id, _sid.c_str(), segment->start().iso(),
+				               segment->end().iso());
+			}
+			else {
+				SEISCOMP_ERROR("[%i] %s: Failed to add segment [%s~%s]",
+				               _id, _sid.c_str(), segment->start().iso(),
+				               segment->end().iso());
+			}
+		}
+	}
+
+	return true;
+}
+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
+
+
+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+void Worker::syncExtent() {
+	if ( _app->_exitRequested || !dbConnect() ) {
+		SEISCOMP_ERROR("[%i] %s:Could not synchronize extent and attribute "
+		               "extents with segments", _id, _sid.c_str());
+		return;
+	}
+
+	// temporary extent
+	DataExtent tmpExt("tmp_" + _sid);
+	tmpExt.setLastScan(_extent->lastScan());
+	tmpExt.setWaveformID(_extent->waveformID());
+	tmpExt.setSegmentOverflow(_segmentOverflow);
+
+	// request attribute extents based on segments found in database,
+	// all time values lack millisecond precision because there is no efficient
+	// aggregate function which combines two columns
+	stringstream oss;
+	oss << "SELECT MIN(" << _T("start") << ") AS " << _T("start") << ", "
+	              "MAX(" << _T("end") << ") AS " << _T("end") << ", " <<
+	              _T("sampleRate") << ", " <<
+	              _T("quality") << ", " <<
+	              "MAX(" << _T("updated") << ") AS " << _T("updated") << ", "
+	              "COUNT(*) AS " << _T("segmentCount") << " "
+	       "FROM DataSegment "
+	       "WHERE _parent_oid = " << _extentOID << " "
+	       "GROUP BY " << _T("sampleRate") << ", " << _T("quality");
+
+	for ( auto it = _db->getObjectIterator(
+	          oss.str(), DataAttributeExtent::TypeInfo()); *it; ++it ) {
+		tmpExt.add(DataAttributeExtent::Cast(*it));
+	}
+
+	size_t attSegCount = 0;
+	for ( size_t i = 0; i < tmpExt.dataAttributeExtentCount(); ++i ) {
+		auto *attExt = tmpExt.dataAttributeExtent(i);
+
+		readAttExtMillis(attExt);
+
+		if ( !i || attExt->start() < tmpExt.start() ) {
+			tmpExt.setStart(attExt->start());
+		}
+		if ( !i || attExt->end() > tmpExt.end() ) {
+			tmpExt.setEnd(attExt->end());
+		}
+		if ( !i || attExt->updated() > tmpExt.updated() ) {
+			tmpExt.setUpdated(attExt->updated());
+		}
+
+		attSegCount += attExt->segmentCount();
+	}
+
+	if ( _segCount != attSegCount ) {
+		SEISCOMP_WARNING("[%i] %s: Attribute extent segment counter differs "
+		                 "from segments counted in current scan [%zu != %zu]",
+		                 _id, _sid.c_str(), attSegCount, _segCount);
+	}
+
+	// remove or update existing attribute extents
 	for ( size_t i = 0; i < _extent->dataAttributeExtentCount(); ) {
-		DataAttributeExtent *attExt = _extent->dataAttributeExtent(i);
-		DataAttributeExtent *tmpAttExt = tmpExt.dataAttributeExtent(attExt->index());
+		auto *attExt = _extent->dataAttributeExtent(i);
+		auto *tmpAttExt = tmpExt.dataAttributeExtent(attExt->index());
 
-		if ( tmpAttExt == NULL ) {
-			SEISCOMP_DEBUG("[%i] %s: removing attribute extent with index %f,%s",
-			               _id, _sid.c_str(), attExt->sampleRate(),
+		// remove if no corresponding attribute extent was found
+		if ( !tmpAttExt ) {
+			SEISCOMP_DEBUG("[%i] %s: Removing attribute extent with index "
+			               "%f,%s", _id, _sid.c_str(), attExt->sampleRate(),
 			               attExt->quality().c_str());
-			_dbWrite->remove(attExt);
+			_db->remove(attExt);
 			_extent->removeDataAttributeExtent(i);
 			continue;
 		}
 
+		// update
 		if ( *attExt != *tmpAttExt ) {
 			*attExt = *tmpAttExt;
-			SEISCOMP_DEBUG("[%i] %s: updating attribute extent with index %f,%s",
-			                _id, _sid.c_str(), attExt->sampleRate(),
+			SEISCOMP_DEBUG("[%i] %s: Updating attribute extent with index "
+			               "%f,%s", _id, _sid.c_str(), attExt->sampleRate(),
 			               attExt->quality().c_str());
-			_dbWrite->update(attExt);
+			_db->update(attExt);
 		}
 
 		++i;
@@ -660,20 +982,92 @@ bool Worker::syncAttributeExtents(const DataExtent &tmpExt) {
 
 	// add new attribute extents
 	for ( size_t i = 0; i < tmpExt.dataAttributeExtentCount(); ++i ) {
-		DataAttributeExtent *tmpAttExt = tmpExt.dataAttributeExtent(i);
-		DataAttributeExtent *attExt = _extent->dataAttributeExtent(tmpAttExt->index());
-		if ( attExt == NULL ) {
+		auto *tmpAttExt = tmpExt.dataAttributeExtent(i);
+		auto *attExt = _extent->dataAttributeExtent(tmpAttExt->index());
+		if ( !attExt ) {
 			attExt = new DataAttributeExtent(*tmpAttExt);
-			SEISCOMP_DEBUG("[%i] %s: adding attribute extent with index %f,%s",
+			SEISCOMP_DEBUG("[%i] %s: Adding attribute extent with index %f,%s",
 			                _id, _sid.c_str(), attExt->sampleRate(),
 			               attExt->quality().c_str());
 			_extent->add(attExt);
-			_dbWrite->write(attExt);
+			_db->insert(attExt);
 		}
 	}
 
-	_dbWrite->driver()->commit();
-	return true;
+	// update extent if at least one attribute extent was found
+	if ( tmpExt.dataAttributeExtentCount() ) {
+		auto modStr = string(*_extent == tmpExt ? "unmodified" : "modified");
+		*_extent = tmpExt;
+
+		if ( writeExtent(OP_UPDATE) ) {
+			SEISCOMP_INFO("[%i] %s: Extent %s: %s ~ %s", _id, _sid.c_str(),
+			              modStr.c_str(),
+			              _extent->start().iso().c_str(),
+			              _extent->end().iso().c_str());
+		}
+	}
+	else {
+		// no segments found, remove entire extent
+		if ( writeExtent(OP_REMOVE) ) {
+			SEISCOMP_INFO("[%i] %s: Extent removed", _id, _sid.c_str());
+		}
+	}
+}
+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
+
+
+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+void Worker::readAttExtMillis(DataAttributeExtent *attExt) {
+	auto *driver = _db->driver();
+
+	// query start time milliseconds
+	auto time = attExt->start();
+	stringstream oss;
+	oss << "SELECT " << _T("start_ms") << " "
+	       "FROM DataSegment "
+	       "WHERE _parent_oid = " << _extentOID << " AND "
+	    << _T("start") << " = '"
+	    << driver->timeToString(time) << "' "
+	       "ORDER BY " << _T("start_ms") << " ASC LIMIT 1";
+
+	if ( !driver->beginQuery(oss.str().c_str()) ) {
+		SEISCOMP_ERROR("Query for attribute extent start milliseconds failed: "
+		               "%s", oss.str().c_str());
+		return;
+	}
+
+	if ( driver->fetchRow() && driver->getRowFieldCount() == 1 ) {
+		time.setUSecs(atoi(static_cast<const char*>(driver->getRowField(0))));
+		attExt->setStart(time);
+	}
+
+	driver->endQuery();
+
+	// query end time milliseconds
+	time = attExt->end();
+	oss.str("");
+	oss.clear();
+	oss << "SELECT " << _T("end_ms") << " "
+	       "FROM DataSegment "
+	       "WHERE _parent_oid = " << _extentOID << " AND "
+	    << _T("end") << " = '"
+	    << driver->timeToString(time) << "' "
+	       "ORDER BY " << _T("end_ms") << " DESC LIMIT 1";
+
+	if ( !driver->beginQuery(oss.str().c_str()) ) {
+		SEISCOMP_ERROR("Query for attribute extent end milliseconds failed: %s",
+		               oss.str().c_str());
+		return;
+	}
+
+	if ( driver->fetchRow() && driver->getRowFieldCount() == 1 ) {
+		time.setUSecs(atoi(static_cast<const char*>(driver->getRowField(0))));
+		attExt->setEnd(time);
+	}
+
+	driver->endQuery();
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -694,12 +1088,23 @@ SCARDAC::SCARDAC(int argc, char **argv)
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-SCARDAC::~SCARDAC() {
-	for ( WorkerList::iterator it = _worker.begin(); it != _worker.end(); ++it ) {
-		delete *it;
-		*it = NULL;
-	}
-	_worker.clear();
+void SCARDAC::printUsage() const {
+	cout << "Usage:"  << endl << "  scardac [options]" << endl << endl
+	     << "Scan waveform data archive and collect availability information "
+	        "from records."
+	     << endl;
+
+	Seiscomp::Client::Application::printUsage();
+
+	cout << "Examples:" << endl
+	     << "Scan the configured archive, write information to the default "
+	        "SeisComP database" << endl
+	     << "  scardac -d localhost -a $SEISCOMP_ROOT/var/lib/archive"
+	     << endl << endl;
+	cout << "Scan a specific archive at /archive, write information to the "
+	        "default SeisComP database" << endl
+	     << "  scardac -d localhost -a /archive"
+	     << endl << endl;
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -710,33 +1115,59 @@ SCARDAC::~SCARDAC() {
 void SCARDAC::createCommandLineDescription() {
 	commandline().addGroup("Collector");
 	commandline().addOption("Collector", "archive,a",
-	                        "Type and location of the waveform archive",
+	                        "Type and location of the waveform archive.",
 	                        &_archive);
 	commandline().addOption("Collector", "threads",
-	                        "Number of threads scanning the archive in parallel",
+	                        "Number of threads scanning the archive in "
+	                        "parallel.",
 	                        &_threads);
-	commandline().addOption("Collector", "batch-size",
-	                        "Batch size of database transactions used when "
-	                        "updating data availability segments, allowed "
-	                        "range: [1,1000]",
-	                        &_batchSize);
 	commandline().addOption("Collector", "jitter",
 	                        "Acceptable derivation of end time and start time "
-	                        "of successive records in multiples of sample time",
+	                        "of successive records in multiples of sample "
+	                        "rate.",
 	                        &_jitter);
-/**
-	commandline().addOption("Collector", "from",
-	                        "Start time for data availablity check. "
-	                        "Format: YYYY-mm-dd['T'HH:MM:SS]",
-	                        &_from);
-	commandline().addOption("Collector", "to",
-	                        "End time for data availablity check. "
-	                        "Format: YYYY-mm-dd['T'HH:MM:SS]",
-	                        &_to);
+	commandline().addOption("Collector", "nslc",
+	                        "Line-based text file of form NET.STA.LOC.CHA "
+	                        "defining available waveform IDs. Depending on the "
+	                        "archive type, size and storage media used this "
+	                        "file may offer a significant performance "
+	                        "improvement compared to collecting the available "
+	                        "streams on each startup. Filters defined by "
+	                        "'--include' or '--exclude' still apply.",
+	                        &_wfidFile);
+	commandline().addOption("Collector", "start",
+	                        "Start of data availability check given as date "
+	                        "string or as number of days before now.",
+	                        &_start);
+	commandline().addOption("Collector", "end",
+	                        "End of data availability check given as date "
+	                        "string or as number of days before now.",
+	                        &_end);
+	commandline().addOption("Collector", "include",
+	                        "Stream IDs to process. If empty all stream IDs "
+	                        "are accepted unless an exclude filter is defined. "
+	                        "This option may be repeated and supports the "
+	                        "wildcards '*' and '?'.",
+	                        &_include);
+	commandline().addOption("Collector", "exclude",
+	                        "Stream IDs to exclude from processing. Excludes "
+	                        "take precedence over includes. This option may be "
+	                        "repeated and supports the wildcards '*' and '?'.",
+	                        &_exclude);
 	commandline().addOption("Collector", "deep-scan",
-	                        "Process all data chunks independ of their "
-	                        "modification time");
-*/
+	                        "Process all data chunks independent of their "
+	                        "modification time.");
+	commandline().addOption("Collector", "modified-since",
+	                        "Only read chunks modified after specific date "
+	                        "given as date string or as number of days before "
+	                        "now. Unused in deep-scan mode. Defaults to last "
+	                        "scan time of extent.",
+	                        &_modifiedSince);
+	commandline().addOption("Collector", "modified-until",
+	                        "Only read chunks modified before specific date "
+	                        "given as date string or as number of days before "
+	                        "now. Unused in deep-scan mode.",
+	                        &_modifiedUntil);
 	commandline().addOption("Collector", "generate-test-data",
 	                        "For each stream in inventory generate test data. "
 	                        "Format: days,gaps,gapseconds,overlaps,"
@@ -750,7 +1181,9 @@ void SCARDAC::createCommandLineDescription() {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool SCARDAC::initConfiguration() {
-	if ( !Client::Application::initConfiguration() ) return false;
+	if ( !Client::Application::initConfiguration() ) {
+		return false;
+	}
 
 	try {
 		_archive = SCCoreApp->configGetString("archive");
@@ -763,24 +1196,73 @@ bool SCARDAC::initConfiguration() {
 	catch (...) {}
 
 	try {
-		_batchSize = SCCoreApp->configGetInt("batchSize");
-	}
-	catch (...) {}
-
-	try {
 		_jitter = SCCoreApp->configGetDouble("jitter");
 	}
 	catch (...) {}
 
 	try {
-		_maxSegments = SCCoreApp->configGetInt("maxSegments");
+		_wfidFile = SCCoreApp->configGetString("nslcFile");
 	}
 	catch (...) {}
 
+	try {
+		int maxSegments = SCCoreApp->configGetInt("maxSegments");
+		if ( maxSegments < 0 ) {
+			SEISCOMP_ERROR("Negative values not allowed for parameter "
+			               "maxSegments");
+			return false;
+		}
+		_maxSegments = static_cast<size_t>(maxSegments);
+	}
+	catch (...) {}
+
+	try {
+		_start = SCCoreApp->configGetString("filter.time.start");
+	}
+	catch (...) {}
+
+	try {
+		_end = SCCoreApp->configGetString("filter.time.end");
+	}
+	catch (...) {}
+
+	if ( _include.empty() ) {
+		try {
+			_include = SCCoreApp->configGetStrings("filter.nslc.include");
+		}
+		catch (...) {
+			try {
+				_include = SCCoreApp->configGetStrings("filter.wfid.include");
+			}
+			catch (...) {}
+		}
+	}
+
+	if ( _exclude.empty() ) {
+		try {
+			_exclude = SCCoreApp->configGetStrings("filter.nslc.exclude");
+		}
+		catch (...) {
+			try {
+				_exclude = SCCoreApp->configGetStrings("filter.wfid.exclude");
+			}
+			catch (...) {}
+		}
+	}
 
 	try {
 		_deepScan = SCCoreApp->commandline().hasOption("deep-scan") ||
-		            SCCoreApp->configGetBool("deepScan");
+		            SCCoreApp->configGetBool("mtime.ignore");
+	}
+	catch (...) {}
+
+	try {
+		_modifiedSince = SCCoreApp->configGetString("mtime.start");
+	}
+	catch (...) {}
+
+	try {
+		_modifiedUntil = SCCoreApp->configGetString("mtime.end");
 	}
 	catch (...) {}
 
@@ -793,7 +1275,9 @@ bool SCARDAC::initConfiguration() {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool SCARDAC::validateParameters() {
-	if ( !Client::Application::validateParameters() ) return false;
+	if ( !Client::Application::validateParameters() ) {
+		return false;
+	}
 
 	// database connection configured, no need to fetch parameters
 	if ( !databaseURI().empty() ) {
@@ -803,34 +1287,51 @@ bool SCARDAC::validateParameters() {
 
 	// thread count
 	if ( _threads < 1 || _threads > MAX_THREADS ) {
-		SEISCOMP_ERROR("invalid number of threads, allowed range: [1,%i]",
-		               MAX_THREADS);
-		return false;
-	}
-
-	// batch size
-	if ( _batchSize < 1 || _batchSize > MAX_BATCHSIZE ) {
-		SEISCOMP_ERROR("invalid batch size, allowed range: [1,%i]",
-		               MAX_BATCHSIZE);
+		SEISCOMP_ERROR("Invalid number of threads, allowed range: [1,%i]",
+		               static_cast<int>(MAX_THREADS));
 		return false;
 	}
 
 	// jitter samples
 	if ( _jitter < 0 ) {
-		SEISCOMP_ERROR("invalid jitter value, minimum value: 0");
+		SEISCOMP_ERROR("Invalid jitter value, minimum value: 0");
 		return false;
 	}
 
 	// start time
-	if ( !_from.empty() && !Core::fromString(_startTime, _from) ) {
-		SEISCOMP_ERROR("invalid start time value");
+	if ( !_start.empty() && !parseDate(_startTime, _start, "start") ) {
 		return false;
 	}
 
 	// end time
-	if ( !_to.empty() && !Core::fromString(_endTime, _to) ) {
-		SEISCOMP_ERROR("invalid end time value");
+	if ( !_end.empty() && !parseDate(_endTime, _end, "start") ) {
 		return false;
+	}
+
+	// wfid filter
+	_wfidFirewall.allow = { std::make_move_iterator(_include.begin()),
+	                        std::make_move_iterator(_include.end()) };
+	_wfidFirewall.deny = { std::make_move_iterator(_exclude.begin()),
+	                       std::make_move_iterator(_exclude.end()) };
+
+	// mtime window start
+	if ( !_modifiedSince.empty() ) {
+		if ( _deepScan ) {
+			SEISCOMP_WARNING("Modified-since option ignored in deep-scan mode");
+		}
+		else if ( !parseDate(_mtimeStart, _modifiedSince, "modified-since") ) {
+			return false;
+		}
+	}
+
+	// mtime window end
+	if ( !_modifiedUntil.empty() ) {
+		if ( _deepScan ) {
+			SEISCOMP_WARNING("Modified-until option ignored in deep-scan mode");
+		}
+		else if ( !parseDate(_mtimeEnd, _modifiedUntil, "modified-until") ) {
+			return false;
+		}
 	}
 
 	return true;
@@ -842,19 +1343,76 @@ bool SCARDAC::validateParameters() {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool SCARDAC::run() {
-	if ( !_testData.empty() )
+	if ( !_testData.empty() ) {
 		return generateTestData();
+	}
 
-	SEISCOMP_INFO("Configuration:\n"
-	              "  archive     : %s\n"
-	              "  threads     : %i\n"
-	              "  batch size  : %i\n"
-	              "  jitter      : %f\n"
-	              "  max segments: %i"/**\n"
-	              "  deep scan   : %s"*/,
-	              _archive.c_str(), _threads, _batchSize,
-	              _jitter, _maxSegments/**, Core::toString(_deepScan).c_str()*/);
+	// close messaging connection as it is only needed to read the database URI
+	if ( _connection && _connection->isConnected() ) {
+		_connection->close();
+	}
 
+	if ( _threads > 1 && !strncmp("sqlite", databaseType().c_str(), 6) ) {
+		SEISCOMP_ERROR("Thread count set to %i, but database type '%s' "
+		               "supports only one simultaneous connection",
+		               _threads, databaseType().c_str());
+		return false;
+	}
+
+	// print configuration
+	string cfgMtime;
+	if ( _deepScan ) {
+		cfgMtime = "         : ignored";
+	}
+	else {
+		stringstream oss;
+		oss << endl
+		    << "    start       : "
+		    << (_mtimeStart ? _mtimeStart->iso() : "last scan of extent")
+		    << endl
+		    << "    end         : " << (_mtimeEnd ? _mtimeEnd->iso() : "-");
+		cfgMtime = oss.str();
+	}
+	string cfgInclude = "-";
+	if ( !_wfidFirewall.allow.empty() ) {
+		stringstream oss;
+		for ( const auto &wfid : _wfidFirewall.allow ) {
+			oss << endl << "      " << wfid;
+		}
+		cfgInclude = oss.str();
+	}
+	string cfgExclude = "-";
+	if ( !_wfidFirewall.deny.empty() ) {
+		stringstream oss;
+		for ( const auto &wfid : _wfidFirewall.deny ) {
+			oss << endl << "      " << wfid;
+		}
+		cfgExclude = oss.str();
+	}
+
+	SEISCOMP_INFO(R"(Configuration:
+  database      : %s
+  archive       : %s
+  threads       : %i
+  jitter        : %f
+  max segments  : %zu
+  nslc list     : %s
+  data filter
+    start time  : %s
+    end time    : %s
+    nslc include: %s
+    nslc exclude: %s
+  mtime%s)",
+	              _settings.database.URI.c_str(), _archive.c_str(), _threads,
+	              _jitter, _maxSegments,
+	              (_wfidFile.empty()
+	                       ?string("obtained by archive scan")
+	                       :_wfidFile).c_str(),
+	              (_startTime?_startTime->iso():string("-")).c_str(),
+	              (_endTime?_endTime->iso():string("-")).c_str(),
+	              cfgInclude.c_str(), cfgExclude.c_str(), cfgMtime.c_str());
+
+	// create collector
 	_collector = Collector::Open(_archive.c_str());
 	if ( !_collector ) {
 		SEISCOMP_ERROR("Could not create data availability collector from "
@@ -862,71 +1420,122 @@ bool SCARDAC::run() {
 		return false;
 	}
 
+	// update collector's time window
+	setTimeWindow(_collector.get());
+
 	// disable public object cache
 	PublicObject::SetRegistrationEnabled(false);
 	Notifier::Disable();
 
+	_dataAvailability = new ::DataAvailability();
 	// query all extents stored in database so far and add them to extent map
-	int count = query()->loadDataExtents(&_dataAvailability);
-	SEISCOMP_INFO("loaded %i extents (streams) from database", count);
+	int count = query()->loadDataExtents(_dataAvailability.get());
+	SEISCOMP_INFO("Loaded %i extents (streams) from database", count);
 
-	// add existing extents to extent map
-	for ( size_t i = 0; i < _dataAvailability.dataExtentCount(); ++i) {
-		DataExtent *extent = _dataAvailability.dataExtent(i);
-		_extentMap[streamID(extent->waveformID())] = extent;
+	Collector::WaveformIDs wids;
+	if ( _wfidFile.empty() ) {
+		SEISCOMP_INFO("Scanning archive for waveform stream IDs");
+		_collector->collectWaveformIDs(wids);
+	}
+	else if ( !readWFIDFile(wids, _wfidFile) ) {
+		return false;
 	}
 
-	SEISCOMP_INFO("scanning archive for streams");
-	Collector::WaveformIDs wids;
-	_collector->collectWaveformIDs(wids);
+	// filter collected waveform IDs
+	bool filterByID = !_wfidFirewall.allow.empty() ||
+	                  !_wfidFirewall.deny.empty();
+	if ( filterByID ) {
+		_wfidFirewall.setCachingEnabled(true);
+		for ( auto it = wids.cbegin(); it != wids.cend(); ) {
+			if ( _wfidFirewall.isAllowed(it->first) ) {
+				++it;
+			}
+			else {
+				SEISCOMP_DEBUG("Stream ID filtered: %s",
+				               it->first.c_str());
+				it = wids.erase(it);
+			}
+		}
+	}
+
+	// add existing extents to extent map
+	bool filterByTime = _startTime || _endTime;
+	ExtentMap extentMap;
+	for ( size_t i = 0; i < _dataAvailability->dataExtentCount(); ++i) {
+		auto *extent = _dataAvailability->dataExtent(i);
+		auto sid = streamID(extent->waveformID());
+
+		if ( filterByID && !_wfidFirewall.isAllowed(sid) ) {
+			SEISCOMP_DEBUG("Skipping existing extent %s: stream ID does not "
+			               "pass filter", sid.c_str());
+			continue;
+		}
+
+		if ( filterByTime && wids.find(sid) == wids.end() ) {
+			if ( _startTime && _startTime >= extent->end() ) {
+				SEISCOMP_DEBUG("Skipping existing extent %s: end time ahead of "
+				               "scan window and no new data found", sid.c_str());
+				continue;
+			}
+			if ( _endTime && _endTime < extent->start() ) {
+				SEISCOMP_DEBUG("Skipping existing extent %s: start time behind "
+				               "scan window and no new data found", sid.c_str());
+				continue;
+			}
+		}
+		extentMap[sid] = extent;
+	}
 
 	// stop here if archive is empty and no extents have been found in database
-	if ( wids.empty() && _extentMap.empty() ) {
-		SEISCOMP_INFO("archive is empty and no extents found in database");
+	if ( wids.empty() && extentMap.empty() ) {
+		SEISCOMP_INFO("%srchive is empty and no extents need to be removed",
+		              filterByID || filterByTime ? "Filtered a" : "A");
 		return true;
 	}
 
 	// Create N worker threads. If the collector is marked as not thread safe
 	// a new collector instance needs to be created starting with the 2nd
 	// worker instance.
-	SEISCOMP_INFO("creating %i worker threads", _threads);
+	SEISCOMP_INFO("Creating %i worker threads", _threads);
+	WorkerList workers;
 	for ( int i = 1; i <= _threads; ++i ) {
-		_worker.push_back(new boost::thread(boost::bind(
-		        &SCARDAC::processExtents, this, i)));
+		workers.push_back(new thread(bind(&SCARDAC::processExtents, this, i)));
 	}
 
 	// add extents to work queue, push may block if queue size is exceeded
-	for ( ExtentMap::const_iterator it = _extentMap.begin();
-	      it != _extentMap.end(); ++it ) {
-		_workQueue.push(WorkQueueItem(it->second, true));
+	for ( auto &it : extentMap ) {
+		_workQueue.push(WorkQueueItem(it.second, true));
 	}
 
 	// search for new streams and create new extents
-	size_t oldSize = _extentMap.size();
-	SEISCOMP_INFO("processing new streams");
+	size_t oldSize = extentMap.size();
+	SEISCOMP_INFO("Processing new streams");
 	for ( const auto &wid : wids ) {
-		if ( _extentMap.find(wid.first) != _extentMap.end() ) {
+		if ( extentMap.find(wid.first) != extentMap.end() ) {
 			continue;
 		}
 
-		DataExtent *extent = DataExtent::Create();
+		auto *extent = DataExtent::Create();
 		extent->setWaveformID(wid.second);
-		_dataAvailability.add(extent);
-		_extentMap[wid.first] = extent;
+		_dataAvailability->add(extent);
+		extentMap[wid.first] = extent;
 		_workQueue.push(WorkQueueItem(extent, false));
 	}
-	SEISCOMP_INFO("found %lu new streams in archive",
-	              static_cast<unsigned long>(_extentMap.size() - oldSize));
+	SEISCOMP_INFO("Found %zu new streams in archive",
+	              extentMap.size() - oldSize);
 
-	// a NULL object is used to signal end of queue
+	// a nullptr object is used to signal end of queue
 	_workQueue.push(WorkQueueItem());
-	SEISCOMP_INFO("last stream pushed, waiting for worker to terminate");
+	SEISCOMP_INFO("Last stream pushed, waiting for worker to terminate");
 
 	// wait for all workers to terminate
-	for ( WorkerList::const_iterator it = _worker.begin();
-	      it != _worker.end(); ++it ) {
-		(*it)->join();
+	for ( auto &worker : workers ) {
+		worker->join();
+		delete worker;
 	}
+	workers.clear();
+
+	_workQueue.reset();
 
 	return true;
 }
@@ -936,10 +1545,45 @@ bool SCARDAC::run() {
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+void SCARDAC::done() {
+	_testData.clear();
+
+	if ( _collector ) {
+		_collector->reset();
+	}
+
+	if ( _dataAvailability ) {
+		_dataAvailability.reset();
+	}
+
+	Client::Application::done();
+}
+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
+
+
+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+void SCARDAC::setTimeWindow(Collector *collector) {
+	if ( _startTime ) {
+		collector->setStartTime(*_startTime);
+	}
+
+	if ( _endTime ) {
+		collector->setEndTime(*_endTime);
+	}
+}
+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
+
+
+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void SCARDAC::processExtents(int threadID) {
-	Collector *collector = _collector.get();
+	auto *collector = _collector.get();
 	if ( threadID > 1 && !_collector->threadSafe() ) {
 		collector = Collector::Open(_archive.c_str());
+		setTimeWindow(collector);
 	}
 	Worker worker(this, threadID, collector);
 
@@ -949,12 +1593,12 @@ void SCARDAC::processExtents(int threadID) {
 			item = _workQueue.pop();
 		}
 		catch ( Client::QueueClosedException & ) {
-			SEISCOMP_DEBUG("[%i] work queue closed", threadID);
+			SEISCOMP_DEBUG("[%i] Work queue closed", threadID);
 			return;
 		}
 
-		if ( item.extent == NULL ) {
-			SEISCOMP_INFO("[%i] read last extent, closing queue", threadID);
+		if ( !item.extent ) {
+			SEISCOMP_INFO("[%i] Read last extent, closing queue", threadID);
 			_workQueue.close();
 			return;
 		}
@@ -970,23 +1614,27 @@ void SCARDAC::processExtents(int threadID) {
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool SCARDAC::generateTestData() {
 	if ( !query()->driver()->isConnected() ) {
-		SEISCOMP_ERROR("database connection not available");
+		SEISCOMP_ERROR("Database connection not available");
 		return false;
 	}
 
 	setLoadInventoryEnabled(true);
 	if ( !reloadInventory() ) {
-		SEISCOMP_ERROR("could not load inventory");
+		SEISCOMP_ERROR("Could not load inventory");
 		return false;
 	}
 
-	DatabaseObjectWriter dbWriter(*query(), true, _batchSize);
+	DatabaseObjectWriter dbWriter(*query(), true);
 
 	vector<string> toks;
 	Core::split(toks, _testData.c_str(), ",");
 
-	int gaps, overlaps, segments;
-	double days, gaplen, overlaplen;
+	int gaps;
+	int overlaps;
+	int segments;
+	double days;
+	double gaplen;
+	double overlaplen;
 	if ( toks.size() != 5 ||
 	     !Core::fromString(days, toks[0]) ||
 	     !Core::fromString(gaps, toks[1]) ||
@@ -995,39 +1643,43 @@ bool SCARDAC::generateTestData() {
 	     !Core::fromString(overlaplen, toks[4]) ||
 	     gaps < 0 || overlaps < 0 || (gaps > 0 && gaplen <= 0) ||
 	     (overlaps > 0 && overlaplen <= 0 ) ) {
-		SEISCOMP_ERROR("invalid format in parameter 'generate-test-data'");
+		SEISCOMP_ERROR("Invalid format in parameter 'generate-test-data'");
 		return false;
 	}
 
-	Core::Time end = Core::Time::GMT();
-	Core::Time start = end - Core::TimeSpan(days * 86400.0, 0);
+	auto end = Core::Time::UTC();
+	auto start = end - Core::TimeSpan(days * 86400.0, 0);
 	segments = gaps + overlaps + 1;
 	Core::TimeSpan segStep(days * 86400.0 / segments);
 	Core::TimeSpan gapLen(gaplen);
 	Core::TimeSpan overlapLen(overlaplen);
 
-	DataModel::Inventory *inv = Client::Inventory::Instance()->inventory();
+	auto *inv = Client::Inventory::Instance()->inventory();
 	for ( size_t iNet = 0; iNet < inv->networkCount(); ++iNet ) {
-		Network *net = inv->network(iNet);
+		auto *net = inv->network(iNet);
+
 		for ( size_t iSta = 0; iSta < net->stationCount(); ++iSta ) {
-			Station *sta = net->station(iSta);
+			auto *sta = net->station(iSta);
+
 			for ( size_t iLoc = 0; iLoc < sta->sensorLocationCount(); ++iLoc ) {
-				SensorLocation *loc = sta->sensorLocation(iLoc);
+				auto *loc = sta->sensorLocation(iLoc);
+
 				for ( size_t iCha = 0; iCha < loc->streamCount(); ++iCha ) {
-					Stream *cha = loc->stream(iCha);
+					auto *cha = loc->stream(iCha);
 					WaveformStreamID wid(net->code(), sta->code(),
 					                     loc->code(), cha->code(), "");
 					double sr(static_cast<double>(cha->sampleRateNumerator()) /
 					          cha->sampleRateDenominator());
+
 					DataExtentPtr ext = DataExtent::Create();
-					ext->setParent(&_dataAvailability);
+					ext->setParent(_dataAvailability.get());
 					ext->setWaveformID(wid);
 					ext->setStart(start);
 					ext->setEnd(end);
 					ext->setUpdated(end);
 					ext->setLastScan(end);
 
-					DataAttributeExtent *attExt = new DataAttributeExtent();
+					auto *attExt = new DataAttributeExtent();
 					attExt->setStart(start);
 					attExt->setEnd(end);
 					attExt->setUpdated(end);
@@ -1036,7 +1688,7 @@ bool SCARDAC::generateTestData() {
 					attExt->setSegmentCount(gaps + overlaps);
 					ext->add(attExt);
 
-					Core::Time t = start;
+					auto t = start;
 					DataSegment *seg;
 					for ( int i = 0; i < segments; ++i ) {
 						seg = new DataSegment();
@@ -1050,6 +1702,7 @@ bool SCARDAC::generateTestData() {
 							t += segStep;
 							seg->setEnd(t);
 						}
+
 						seg->setQuality("M");
 						seg->setSampleRate(sr);
 						seg->setOutOfOrder(false);
@@ -1058,14 +1711,14 @@ bool SCARDAC::generateTestData() {
 					}
 
 					if ( dbWriter(ext.get()) ) {
-						SEISCOMP_INFO("wrote extent for stream: %s.%s.%s.%s",
+						SEISCOMP_INFO("Wrote extent for stream: %s.%s.%s.%s",
 						               net->code().c_str(),
 						               sta->code().c_str(),
 						               loc->code().c_str(),
 						               cha->code().c_str());
 					}
 					else {
-						SEISCOMP_WARNING("could not write extent for stream: "
+						SEISCOMP_WARNING("Could not write extent for stream: "
 						                 "%s.%s.%s.%s",
 						                 net->code().c_str(),
 						                 sta->code().c_str(),

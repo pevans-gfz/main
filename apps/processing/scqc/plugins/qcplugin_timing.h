@@ -12,8 +12,9 @@
  ***************************************************************************/
 
 
-#ifndef SEISCOMP_QC_QCTIMING_H__
-#define SEISCOMP_QC_QCTIMING_H__
+#ifndef SEISCOMP_QC_QCTIMING_H
+#define SEISCOMP_QC_QCTIMING_H
+
 
 #include <seiscomp/plugins/qc/qcplugin.h>
 
@@ -24,19 +25,17 @@ namespace Qc {
 
 
 DEFINE_SMARTPOINTER(QcPluginTiming);
-
 class QcPluginTiming : public QcPlugin {
-    DECLARE_SC_CLASS(QcPluginTiming);
+	DECLARE_SC_CLASS(QcPluginTiming);
 
-public:
-    QcPluginTiming();
-    std::string registeredName() const;
-    std::vector<std::string> parameterNames() const;
+	public:
+		QcPluginTiming();
 };
 
 
+}
+}
+}
 
-}
-}
-}
+
 #endif

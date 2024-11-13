@@ -43,8 +43,7 @@ void showQueries(const Config::Config& conf)
 	}
 
 	std::cout << "[ " << sqlQueries.size() << " queries found ]\n"  << std::endl;
-	for ( size_t i = 0; i < sqlQueries.size(); ++i )
-	{
+	for ( size_t i = 0; i < sqlQueries.size(); ++i ) {
 		std::string desc, query;
 
 		try { desc = conf.getString("query." + sqlQueries[i] + ".description"); } catch ( ... ) {}
@@ -53,13 +52,15 @@ void showQueries(const Config::Config& conf)
 		DBQuery q(sqlQueries[i], desc, query);
 		std::cout << "Query name: " << q.name() << std::endl;
 		std::cout << "Description: " << q.description() << std::endl;
-		if (q.hasParameter())
-		{
-			std::cout << "number of parameter: " << q.parameter().size() << std::endl;
+		if (q.hasParameter()) {
+			std::cout << "number of parameters: " << q.parameter().size() << std::endl;
 			std::cout << "Parameter: ";
 			for (std::vector<std::string>::const_iterator it = q.parameter().begin();
 			        it < q.parameter().end(); ++it)
 				std::cout << *it << " ";
+		}
+		else {
+			std::cout << "number of parameters: none";
 		}
 		std::cout << std::endl;
 		std::cout << std::endl;
@@ -109,19 +110,59 @@ class AppQuery : public Client::Application {
 			setDatabaseEnabled(true, false);
 		}
 
+	protected:
 		void createCommandLineDescription() {
 			commandline().addGroup("Commands");
-			commandline().addOption("Commands", "query,Q", "Execute the given query from the commandline.", &_query);
-			commandline().addOption("Commands", "print-header", "Print the query parameters and the query filter description as a header of the query output.");
-			commandline().addOption("Commands", "showqueries", "Show the stored queries in queries.cfg");
+			commandline().addOption("Commands", "showqueries",
+			                        "Show the queries defined in 'queries.cfg'.");
+			commandline().addOption("Commands", "delimiter",
+			                        "Column delimiter. If found, this character "
+			                        "will be escaped in output values.",
+			                        &_columnDelimiter);
+			commandline().addOption("Commands", "print-column-name",
+			                        "Print the name of each output column in a "
+			                        "header.");
+			commandline().addOption("Commands", "print-header",
+			                        "Print the query parameters and the query filter "
+			                        "description as a header of the query output.");
+			commandline().addOption("Commands", "print-query-only",
+			                        "Only print the full query to stdout and "
+			                        "then quit.");
+			commandline().addOption("Commands", "query,Q",
+			                        "Execute the given query instead of applying "
+			                        "queries pre-defined by configuration.",
+			                        &_query);
 		}
 
-		virtual void printUsage() {
-			std::cout << "Basic usage: scquery [options] <queryname> parameter0 parameter1 ...\n"
-			             "The predefined queries are stored in queries.cfg and can be listed via --showqueries\n"
+		bool validateParameters() {
+			if ( !Seiscomp::Client::Application::validateParameters() ) {
+				return false;
+			}
+
+			if ( commandline().hasOption("showqueries") ) {
+				 setDatabaseEnabled(false, false);
+			}
+			else {
+				setDatabaseEnabled(true, false);
+			}
+			return true;
+		}
+
+		void printUsage() const {
+			std::cout << "Usage:" << std::endl << "  scquery [options] [queryname] parameter0 parameter1 ..."
+		              << std::endl << std::endl
+			          << "Query the database using predefined queries stored in 'queries.cfg'"
 			          << std::endl;
 
 			Client::Application::printUsage();
+
+			std::cout << "Examples:" << std::endl;
+			std::cout << "List all configured queries" << std::endl
+			          << "  scquery --showqueries" << std::endl << std::endl;
+			std::cout << "Use the 'eventFilter' query, additionally print the column names as header"
+			          << std::endl
+			          << "  scquery -d localhost --print-column-name eventFilter 50 52 10.5 12.5 2.5 5 2021-01-01 2022-01-01"
+			          << std::endl;
 		}
 
 		bool run() {
@@ -136,10 +177,17 @@ class AppQuery : public Client::Application {
 				return true;
 			}
 
+			if ( commandline().hasOption("print-column-name") ) {
+				_columnName = true;
+			}
+
 			if ( commandline().hasOption("print-header") ) {
 				_header = true;
 			}
 
+			if ( commandline().hasOption("print-query-only") ) {
+				_printOnly = true;
+			}
 			std::vector<std::string> qParameter = commandline().unrecognizedOptions();
 
 			if (!qParameter.empty())
@@ -156,9 +204,9 @@ class AppQuery : public Client::Application {
 						std::cerr << "The amount of parameter is not corresponding with given query!" << std::endl;
 						std::cerr << "Given arguments: ";
 						for (size_t i = 0; i < params.size(); ++i) {
-							std::cout << params[i] << " ";
+							std::cerr << params[i] << " ";
 						}
-						std::cout << std::endl;
+						std::cerr << std::endl;
 
 						std::cerr << "Query parameter: ";
 						for (size_t i = 0; i < q->parameter().size(); ++i) {
@@ -170,9 +218,14 @@ class AppQuery : public Client::Application {
 						return false;
 					}
 
+					if ( _printOnly ) {
+						std::cout << "Query:" << std::endl << q->query() << std::endl;
+						return true;
+					}
+
 					DBConnection dbConnection(database());
 					//std::cerr << *q << std::endl;
-					if (!dbConnection.executeQuery(*q)) {
+					if ( !dbConnection.executeQuery(*q, _columnName, _columnDelimiter ) ) {
 						std::cerr << "Could not execute query: " << q->query() << std::endl;
 					}
 					if ( _header ) {
@@ -188,9 +241,14 @@ class AppQuery : public Client::Application {
 				}
 			}
 			else if ( !_query.empty() ) {
+				if ( _printOnly ) {
+					std::cout << "Query:" << std::endl << _query << std::endl;
+					return true;
+				}
+
 				DBQuery q("default", "default", _query);
 				DBConnection dbConnection(database());
-				if (!dbConnection.executeQuery(q)) {
+				if ( !dbConnection.executeQuery(q, _header, _columnDelimiter) ) {
 					std::cerr << "Could not execute query: " << _query << std::endl;
 				}
 				if ( _header ) {
@@ -206,7 +264,10 @@ class AppQuery : public Client::Application {
 
 	private:
 		std::string _query;
+		bool        _columnName{false};
 		bool        _header{false};
+		char        _columnDelimiter{'|'};
+		bool        _printOnly{false};
 };
 
 

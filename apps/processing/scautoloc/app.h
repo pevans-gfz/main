@@ -34,42 +34,39 @@ namespace Applications {
 namespace Autoloc {
 
 
-class App : public Client::Application,
-            protected ::Autoloc::Autoloc3 {
+class App : public Client::Application, protected ::Autoloc::Autoloc3
+{
 	public:
 		App(int argc, char **argv);
-		~App();
-
+		~App() override = default;
 
 	public:
 		bool feed(DataModel::Pick*);
 		bool feed(DataModel::Amplitude*);
 		bool feed(DataModel::Origin*);
-
+		virtual void printUsage() const override;
 
 	protected:
-		void createCommandLineDescription();
-		bool validateParameters();
-		bool initConfiguration();
+		void createCommandLineDescription() override;
+		bool validateParameters() override;
+		bool initConfiguration() override;
 		bool initInventory();
 		// initialize one station at runtime
 		bool initOneStation(const DataModel::WaveformStreamID&, const Core::Time&);
 
 		void readHistoricEvents();
 
-		bool init();
-		bool run();
-		void done();
+		bool init() override;
+		bool run() override;
+		void done() override;
 
-		void handleMessage(Core::Message* msg);
-		void handleTimeout();
-		void handleAutoShutdown();
+		void handleMessage(Core::Message* msg) override;
+		void handleTimeout() override;
+		void handleAutoShutdown() override;
 
-		void addObject(const std::string& parentID, DataModel::Object *o);
-		void removeObject(const std::string& parentID, DataModel::Object *o);
-		void updateObject(const std::string& parentID, DataModel::Object *o);
+		void addObject(const std::string& parentID, DataModel::Object *o) override;
 
-		virtual bool _report(const ::Autoloc::Origin *origin);
+		bool _report(const ::Autoloc::Origin *origin) override;
 //		bool runFromPickFile();
 		bool runFromXMLFile(const char *fname);
 		bool runFromEPFile(const char *fname);
@@ -79,23 +76,26 @@ class App : public Client::Application,
 		void timeStamp() const;
 
 	protected:
-//		DataModel::Origin *convertToSC3  (const ::Autoloc::Origin* origin, bool allPhases=true);
-		::Autoloc::Origin *convertFromSC3(const DataModel::Origin* sc3origin);
-		::Autoloc::Pick   *convertFromSC3(const DataModel::Pick*   sc3pick);
+//		DataModel::Origin *convertToSC  (const ::Autoloc::Origin* origin, bool allPhases=true);
+		::Autoloc::Origin *convertFromSC(const DataModel::Origin* scorigin);
+		::Autoloc::Pick   *convertFromSC(const DataModel::Pick*   scpick);
 
 	private:
 		std::string _inputFileXML; // for XML playback
-		std::string _inputEPFile; // for offline processing
+		std::string _inputEPFile;  // for offline processing
 		std::string _stationLocationFile;
-		std::string _gridConfigFile;
-		std::string _amplTypeAbs, _amplTypeSNR;
+		std::string _gridConfigFile{"@DATADIR@/scautoloc/grid.conf"};
+		std::string _amplTypeAbs{"mb"};
+		std::string _amplTypeSNR{"snr"};
 
-		std::queue<DataModel::PublicObjectPtr> _objects; // for XML playback
+		// sorted objects for playback
+		std::queue<DataModel::PublicObjectPtr> _objects;
+
 		double _playbackSpeed;
 		Core::Time playbackStartTime;
 		Core::Time objectsStartTime;
 		Core::Time syncTime;
-		unsigned int objectCount;
+		size_t objectCount;
 
 		DataModel::EventParametersPtr _ep;
 		DataModel::InventoryPtr inventory;
@@ -104,10 +104,10 @@ class App : public Client::Application,
 		int _keepEventsTimeSpan;
 		int _wakeUpTimout;
 
-		ObjectLog   *_inputPicks;
-		ObjectLog   *_inputAmps;
-		ObjectLog   *_inputOrgs;
-		ObjectLog   *_outputOrgs;
+		ObjectLog *_inputPicks;
+		ObjectLog *_inputAmps;
+		ObjectLog *_inputOrgs;
+		ObjectLog *_outputOrgs;
 };
 
 

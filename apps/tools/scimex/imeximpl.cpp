@@ -18,7 +18,6 @@
 #include <functional>
 #include <algorithm>
 
-#include <boost/bind.hpp>
 #include <boost/iostreams/stream.hpp>
 #include <boost/iostreams/categories.hpp>
 #include <boost/iostreams/device/array.hpp>
@@ -157,30 +156,6 @@ void messageInfo(Core::Message* message) {
 // end debug
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-
-
-
-
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-bool findPick(DataModel::Arrival* arrival, DataModel::Pick* pick)
-{
-	if ( arrival->pickID() == pick->publicID() )
-		return true;
-	return false;
-}
-// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-
-
-
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-bool findAmplitude(DataModel::StationMagnitude* sm, DataModel::Amplitude* sa)
-{
-	if ( sm->amplitudeID() == sa->publicID() )
-		return true;
-	return false;
-}
-// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 
 
@@ -1119,7 +1094,7 @@ void ImExImpl::serializeMessage(const string &destination, Core::Message *messag
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-void ImExImpl::sendOrigin(DataModel::Origin* origin, bool update) {
+void ImExImpl::sendOrigin(DataModel::Origin *origin, bool update) {
 	string originID = origin->publicID();
 	SEISCOMP_DEBUG("Sending origin with id: %s", originID.c_str());
 	DataModel::Notifier::Enable();
@@ -1128,23 +1103,23 @@ void ImExImpl::sendOrigin(DataModel::Origin* origin, bool update) {
 
 	// Send picks
 	for ( size_t i = 0; i < origin->arrivalCount(); ++i ) {
-		DataModel::Arrival* arrival = origin->arrival(i);
-		ImEx::PickList::const_iterator pickIt = _imex->pickList().begin();
+		auto arrival = origin->arrival(i);
+		auto pickIt = _imex->pickList().begin();
 		for ( ; pickIt != _imex->pickList().end(); ++pickIt ) {
 			if ( arrival->pickID() == (*pickIt)->publicID() ) {
-				SentPicks::iterator it = find_if(
-						_sentPicks.begin(), _sentPicks.end(),
-						bind1st(
-							pointer_to_binary_function<DataModel::Arrival*, DataModel::Pick*, bool>(findPick),
-							arrival
-						)
+				auto it = find_if(
+					_sentPicks.begin(), _sentPicks.end(),
+					[arrival](DataModel::Pick *pick) -> bool {
+						return arrival->pickID() == pick->publicID();
+					}
 				);
 
 				if ( it == _sentPicks.end() ) {
 					_sentPicks.push_back((*pickIt).get());
 					imexMessage.notifierMessage().attach(
 						new DataModel::Notifier(
-							DataModel::EventParameters::ClassName(), DataModel::OP_ADD, pickIt->get()
+							DataModel::EventParameters::ClassName(),
+							DataModel::OP_ADD, pickIt->get()
 						)
 					);
 				}
@@ -1220,22 +1195,25 @@ void ImExImpl::sendOrigin(DataModel::Origin* origin, bool update) {
 		int amplitudeCount = 0;
 		for ( size_t i = 0; i < origin->stationMagnitudeCount(); ++i ) {
 			// Send Amplitudes first
-			DataModel::StationMagnitude* stationMagnitude = origin->stationMagnitude(i);
-			ImEx::AmplitudeList::const_iterator saIt = _imex->amplitudeList().begin();
+			auto stationMagnitude = origin->stationMagnitude(i);
+			auto saIt = _imex->amplitudeList().begin();
 			for ( ; saIt != _imex->amplitudeList().end(); ++saIt) {
 				if ( stationMagnitude->amplitudeID() == (*saIt)->publicID() ) {
-					SentAmplitudes::iterator it = find_if(
+					auto it = find_if(
 						_sentAmplitudes.begin(),
 						_sentAmplitudes.end(),
-						bind1st(
-							pointer_to_binary_function<DataModel::StationMagnitude*, DataModel::Amplitude*, bool>(
-									findAmplitude), stationMagnitude));
+						[stationMagnitude](DataModel::Amplitude *amplitude) -> bool {
+							return stationMagnitude->amplitudeID() == amplitude->publicID();
+						}
+					);
 					if ( it == _sentAmplitudes.end() ) {
 						++amplitudeCount;
 						_sentAmplitudes.push_back((*saIt).get());
 						imexMessage.notifierMessage().attach(
 							new DataModel::Notifier(
-								DataModel::EventParameters::ClassName(), DataModel::OP_ADD, saIt->get()
+								DataModel::EventParameters::ClassName(),
+								DataModel::OP_ADD,
+								saIt->get()
 							)
 						);
 					}

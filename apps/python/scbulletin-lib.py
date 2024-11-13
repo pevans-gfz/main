@@ -14,8 +14,14 @@
 ############################################################################
 
 import sys
-import seiscomp.client, seiscomp.io, seiscomp.math
-import seiscomp.datamodel, seiscomp.logging, seiscomp.seismology
+import seiscomp.client
+import seiscomp.io
+import seiscomp.math
+import seiscomp.datamodel
+import seiscomp.logging
+import seiscomp.seismology
+
+from seiscomp.datamodel import QMLTypeMapper
 
 
 def time2str(time):
@@ -53,27 +59,62 @@ def stationCount(org, minArrivalWeight):
     count = 0
     for i in range(org.arrivalCount()):
         arr = org.arrival(i)
-        #   if arr.weight()> 0.5:
-        if arr.weight() >= minArrivalWeight:
+        #   if eight()> 0.5:
+        wt = arrivalWeight(arr)
+        if wt >= minArrivalWeight:
             count += 1
+
     return count
 
 
 def uncertainty(quantity):
     # for convenience/readability: get uncertainty from a quantity
     try:
-        err = 0.5*(quantity.lowerUncertainty()+quantity.upperUncertainty())
-    except:
+        err = 0.5 * (quantity.lowerUncertainty() + quantity.upperUncertainty())
+    except ValueError:
         try:
             err = quantity.uncertainty()
-        except:
+        except ValueError:
             err = None
 
     return err
 
 
-class Bulletin(object):
+def arrivalWeight(arrival):
+    # guess arrival weight if not available
+    wt = 0
+    try:
+        wt = arrival.weight()
+    except ValueError:
+        if (
+            arrival.timeUsed()
+            or arrival.horizontalSlownessUsed()
+            or arrival.backazimuthUsed()
+        ):
+            wt = 1
 
+    return wt
+
+
+def createKML(mode):
+    if mode == "open":
+        text = '<?xml version="1.0" encoding="UTF-8"?>'
+        text += '<kml xmlns="http://www.opengis.net/kml/2.2">'
+        text += "<Document><name>SeisComP event parameters</name>"
+        text += "<name>SeisComP: earthquakes</name>"
+        text += '<Style id="earthquake"><LabelStyle><scale>1</scale></LabelStyle><IconStyle>'
+        text += "<Icon><href>http://maps.google.com/mapfiles/kml/paddle/wht-stars.png</href></Icon>"
+        text += '<hotSpot x="0.5" y="0.0" xunits="fraction" yunits="fraction"/>'
+        text += "</IconStyle></Style>"
+    elif mode == "close":
+        text = "</Document></kml>"
+    else:
+        return False
+
+    return text
+
+
+class Bulletin(object):
     def __init__(self, dbq, long=True):
         self._dbq = dbq
         self._long = long
@@ -89,7 +130,7 @@ class Bulletin(object):
 
     def _getArrivalsSorted(self, org):
         # returns arrival list sorted by distance
-        arrivals = [ org.arrival(i) for i in range(org.arrivalCount()) ]
+        arrivals = [org.arrival(i) for i in range(org.arrivalCount())]
         return sorted(arrivals, key=lambda t: t.distance())
 
     def _getPicks(self, org):
@@ -123,17 +164,16 @@ class Bulletin(object):
 
         try:
             depthPhaseCount = org.quality().depthPhaseCount()
-        except:
+        except ValueError:
             depthPhaseCount = 0
             for arr in arrivals:
-                wt = arr.weight()
+                wt = arrivalWeight(arr)
                 pha = arr.phase().code()
                 #  if (pha[0] in ["p","s"] and wt >= 0.5 ):
-                if (pha[0] in ["p", "s"] and wt >= self.minArrivalWeight):
+                if pha[0] in ["p", "s"] and wt >= self.minArrivalWeight:
                     depthPhaseCount += 1
 
         txt = ""
-
         evt = self._evt
         if not evt and self._dbq:
             evt = self._dbq.getEvent(orid)
@@ -145,22 +185,33 @@ class Bulletin(object):
                 txt += "    Preferred Origin ID    %s\n" % evt.preferredOriginID()
                 txt += "    Preferred Magnitude ID %s\n" % evt.preferredMagnitudeID()
             try:
-                type = evt.type()
-                txt += "    Type                   %s\n" % seiscomp.datamodel.EEventTypeNames.name(
-                    type)
-            except:
-                pass
+                evtType = evt.type()
+                txt += (
+                    "    Type                   %s\n"
+                    % seiscomp.datamodel.EEventTypeNames.name(evtType)
+                )
+            except ValueError:
+                seiscomp.logging.debug(
+                    "%s: ignoring empty or unknown event type" % evt.publicID()
+                )
+
             txt += "    Description\n"
             for i in range(evt.eventDescriptionCount()):
                 evtd = evt.eventDescription(i)
                 evtdtype = seiscomp.datamodel.EEventDescriptionTypeNames.name(
-                    evtd.type())
+                    evtd.type()
+                )
                 txt += "      %s: %s" % (evtdtype, evtd.text())
 
             if extra:
                 try:
-                    txt += "\n    Creation time          %s\n" % evt.creationInfo().creationTime().toString("%Y-%m-%d %H:%M:%S")
-                except:
+                    txt += (
+                        "\n    Creation time          %s\n"
+                        % evt.creationInfo()
+                        .creationTime()
+                        .toString("%Y-%m-%d %H:%M:%S")
+                    )
+                except ValueError:
                     pass
             txt += "\n"
             preferredMagnitudeID = evt.preferredMagnitudeID()
@@ -189,10 +240,14 @@ class Bulletin(object):
         if timerr:
             if self.enhanced:
                 txt += "    Time                   %s   +/- %8.3f s\n" % (
-                    tstr[11:], timerr)
+                    tstr[11:],
+                    timerr,
+                )
             else:
                 txt += "    Time                   %s  +/- %6.1f s\n" % (
-                    tstr[11:-2], timerr)
+                    tstr[11:-2],
+                    timerr,
+                )
         else:
             if self.enhanced:
                 txt += "    Time                   %s\n" % tstr[11:]
@@ -202,10 +257,14 @@ class Bulletin(object):
         if laterr:
             if self.enhanced:
                 txt += "    Latitude              %10.5f deg  +/- %8.3f km\n" % (
-                    lat, laterr)
+                    lat,
+                    laterr,
+                )
             else:
                 txt += "    Latitude              %7.2f deg  +/- %6.0f km\n" % (
-                    lat, laterr)
+                    lat,
+                    laterr,
+                )
         else:
             if self.enhanced:
                 txt += "    Latitude              %10.5f deg\n" % lat
@@ -214,10 +273,14 @@ class Bulletin(object):
         if lonerr:
             if self.enhanced:
                 txt += "    Longitude             %10.5f deg  +/- %8.3f km\n" % (
-                    lon, lonerr)
+                    lon,
+                    lonerr,
+                )
             else:
                 txt += "    Longitude             %7.2f deg  +/- %6.0f km\n" % (
-                    lon, lonerr)
+                    lon,
+                    lonerr,
+                )
         else:
             if self.enhanced:
                 txt += "    Longitude             %10.5f deg\n" % lon
@@ -235,10 +298,14 @@ class Bulletin(object):
             if depthPhaseCount >= self.minDepthPhaseCount:
                 if self.enhanced:
                     txt += "   +/- %8.3f km  (%d depth phases)\n" % (
-                        deperr, depthPhaseCount)
+                        deperr,
+                        depthPhaseCount,
+                    )
                 else:
                     txt += "   +/- %4.0f km  (%d depth phases)\n" % (
-                        deperr, depthPhaseCount)
+                        deperr,
+                        depthPhaseCount,
+                    )
             else:
                 if self.enhanced:
                     txt += "   +/- %8.3f km\n" % deperr
@@ -249,54 +316,71 @@ class Bulletin(object):
         if self.useEventAgencyID:
             try:
                 agencyID = evt.creationInfo().agencyID()
-            except:
+            except ValueError:
                 pass
         else:
             try:
                 agencyID = org.creationInfo().agencyID()
-            except:
+            except ValueError:
                 pass
+
         txt += "    Agency                 %s\n" % agencyID
         if extra:
             try:
                 authorID = org.creationInfo().author()
-            except:
+            except ValueError:
                 authorID = "NOT SET"
             txt += "    Author                 %s\n" % authorID
         txt += "    Mode                   "
         try:
             txt += "%s\n" % seiscomp.datamodel.EEvaluationModeNames.name(
-                org.evaluationMode())
-        except:
+                org.evaluationMode()
+            )
+        except ValueError:
             txt += "NOT SET\n"
         txt += "    Status                 "
         try:
             txt += "%s\n" % seiscomp.datamodel.EEvaluationStatusNames.name(
-                org.evaluationStatus())
-        except:
+                org.evaluationStatus()
+            )
+        except ValueError:
             txt += "NOT SET\n"
 
         if extra:
             txt += "    Creation time          "
             try:
-                txt += "%s\n" % org.creationInfo().creationTime().toString("%Y-%m-%d %H:%M:%S")
-            except:
+                txt += "%s\n" % org.creationInfo().creationTime().toString(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            except ValueError:
                 txt += "NOT SET\n"
 
         try:
             if self.enhanced:
-                txt += "    Residual RMS           %9.3f s\n" % org.quality().standardError()
+                txt += (
+                    "    Residual RMS           %9.3f s\n"
+                    % org.quality().standardError()
+                )
             else:
-                txt += "    Residual RMS           %6.2f s\n" % org.quality().standardError()
-        except:
+                txt += (
+                    "    Residual RMS           %6.2f s\n"
+                    % org.quality().standardError()
+                )
+        except ValueError:
             pass
 
         try:
             if self.enhanced:
-                txt += "    Azimuthal gap           %8.1f deg\n" % org.quality().azimuthalGap()
+                txt += (
+                    "    Azimuthal gap           %8.1f deg\n"
+                    % org.quality().azimuthalGap()
+                )
             else:
-                txt += "    Azimuthal gap           %5.0f deg\n" % org.quality().azimuthalGap()
-        except:
+                txt += (
+                    "    Azimuthal gap           %5.0f deg\n"
+                    % org.quality().azimuthalGap()
+                )
+        except ValueError:
             pass
 
         txt += "\n"
@@ -339,18 +423,25 @@ class Bulletin(object):
             if extra:
                 try:
                     agencyID = mag.creationInfo().agencyID()
-                except:
+                except ValueError:
                     pass
             else:
                 agencyID = ""
-            txt += "    %-8s %5.2f %8s %3d %s  %s\n" % \
-                (typ, val, err, mag.stationCount(), preferredMarker, agencyID)
+            txt += "    %-8s %5.2f %8s %3d %s  %s\n" % (
+                typ,
+                val,
+                err,
+                mag.stationCount(),
+                preferredMarker,
+                agencyID,
+            )
 
         if not foundPrefMag and preferredMagnitudeID != "":
             mag = seiscomp.datamodel.Magnitude.Find(preferredMagnitudeID)
             if mag is None and self._dbq:
                 o = self._dbq.loadObject(
-                    seiscomp.datamodel.Magnitude.TypeInfo(), preferredMagnitudeID)
+                    seiscomp.datamodel.Magnitude.TypeInfo(), preferredMagnitudeID
+                )
                 mag = seiscomp.datamodel.Magnitude.Cast(o)
 
             if mag:
@@ -368,12 +459,18 @@ class Bulletin(object):
                 if extra:
                     try:
                         agencyID = mag.creationInfo().agencyID()
-                    except:
+                    except ValueError:
                         pass
                 else:
                     agencyID = ""
-                txt += "    %-8s %5.2f %8s %3d %s  %s\n" % \
-                    (typ, val, err, mag.stationCount(), preferredMarker, agencyID)
+                txt += "    %-8s %5.2f %8s %3d %s  %s\n" % (
+                    typ,
+                    val,
+                    err,
+                    mag.stationCount(),
+                    preferredMarker,
+                    agencyID,
+                )
 
         txt = tmptxt + "%d Network magnitudes:\n" % networkMagnitudeCount + txt
 
@@ -410,37 +507,39 @@ class Bulletin(object):
             if self.enhanced:
                 try:
                     azi = "%5.1f" % arr.azimuth()
-                except:
+                except ValueError:
                     azi = "  N/A"
                 tstr = time2str(p.time().value())[11:]
                 try:
                     res = "%7.3f" % arr.timeResidual()
-                except:
+                except ValueError:
                     res = "    N/A"
             else:
                 try:
                     azi = "%3.0f" % arr.azimuth()
-                except:
+                except ValueError:
                     azi = "N/A"
                 tstr = time2str(p.time().value())[11:-2]
                 try:
                     res = "%5.1f" % arr.timeResidual()
-                except:
+                except ValueError:
                     res = "  N/A"
-            dist_azi[net+"_"+sta] = (dist, azi)
-            wt = arr.weight()
+
+            dist_azi[net + "_" + sta] = (dist, azi)
+            wt = arrivalWeight(arr)
             pha = arr.phase().code()
             flag = "X "[wt > 0.1]
+
             try:
-                status = seiscomp.datamodel.EEvaluationModeNames.name(p.evaluationMode())[
-                    0].upper()
-            except:
+                status = seiscomp.datamodel.EEvaluationModeNames.name(
+                    p.evaluationMode()
+                )[0].upper()
+            except ValueError:
                 status = "-"
             if self.polarities:
                 try:
-                    pol = seiscomp.datamodel.EPickPolarityNames.name(
-                        p.polarity())
-                except:
+                    pol = seiscomp.datamodel.EPickPolarityNames.name(p.polarity())
+                except ValueError:
                     pol = None
                 if pol:
                     if pol == "positive":
@@ -453,11 +552,34 @@ class Bulletin(object):
                         pol = "."
                 else:
                     pol = "."
-                line = lineFMT % (sta, net, dist, azi, pha,
-                                  tstr, res, status, flag, wt, pol, sta)
+                line = lineFMT % (
+                    sta,
+                    net,
+                    dist,
+                    azi,
+                    pha,
+                    tstr,
+                    res,
+                    status,
+                    flag,
+                    wt,
+                    pol,
+                    sta,
+                )
             else:
-                line = lineFMT % (sta, net, dist, azi, pha,
-                                  tstr, res, status, flag, wt, sta)
+                line = lineFMT % (
+                    sta,
+                    net,
+                    dist,
+                    azi,
+                    pha,
+                    tstr,
+                    res,
+                    status,
+                    flag,
+                    wt,
+                    sta,
+                )
             lines.append((dist, line))
 
         lines.sort()
@@ -465,7 +587,9 @@ class Bulletin(object):
         txt += "\n"
         txt += "%d Phase arrivals:\n" % org.arrivalCount()
         if self.enhanced:
-            txt += "    sta   net      dist   azi  phase   time             res     wt  "
+            txt += (
+                "    sta   net      dist   azi  phase   time             res     wt  "
+            )
         else:
             txt += "    sta   net  dist azi  phase   time         res     wt  "
         if self.polarities:
@@ -494,7 +618,7 @@ class Bulletin(object):
 
             try:
                 w = stationMagnitudeContributions[smid].weight()
-            except:
+            except ValueError:
                 w = self.minStationMagnitudeWeight
             if w < self.minStationMagnitudeWeight:
                 continue
@@ -512,29 +636,33 @@ class Bulletin(object):
 
         for typ in stationMagnitudes:
             for mag in stationMagnitudes[typ]:
-
                 key = mag.amplitudeID()
-                amp = seiscomp.datamodel.Amplitude.Find(key)
-                if amp is None and self._dbq:
-                    seiscomp.logging.debug(
-                        "missing station amplitude '%s'" % key)
+                if key:
+                    amp = seiscomp.datamodel.Amplitude.Find(key)
+                    if amp is None and self._dbq:
+                        seiscomp.logging.debug("missing station amplitude '%s'" % key)
 
-                    # FIXME really slow!!!
-                    obj = self._dbq.loadObject(
-                        seiscomp.datamodel.Amplitude.TypeInfo(), key)
-                    amp = seiscomp.datamodel.Amplitude.Cast(obj)
+                        # try to load amplitude from database
+                        obj = self._dbq.loadObject(
+                            seiscomp.datamodel.Amplitude.TypeInfo(), key
+                        )
+                        amp = seiscomp.datamodel.Amplitude.Cast(obj)
+                else:
+                    amp = None
+                    # This is expected behaviour for some magnitudes like Me.
 
-                p = a = "N/A"
+                p = ""
+                a = "N/A"
                 if amp:
                     try:
                         a = "%g" % amp.amplitude().value()
-                    except:
+                    except ValueError:
                         a = "N/A"
 
                     if typ in ["mb", "Ms", "Ms(BB)"]:
                         try:
                             p = "%.2f" % amp.period().value()
-                        except:
+                        except ValueError:
                             p = "N/A"
                     else:
                         p = ""
@@ -544,8 +672,8 @@ class Bulletin(object):
                 sta = wfid.stationCode()
 
                 try:
-                    dist, azi = dist_azi[net+"_"+sta]
-                except:
+                    dist, azi = dist_azi[net + "_" + sta]
+                except KeyError:
                     dist, azi = 0, "  N/A" if self.enhanced else "N/A"
 
                 val = mag.magnitude().value()
@@ -574,6 +702,7 @@ class Bulletin(object):
 
         if not evt and self._dbq:
             evt = self._dbq.getEvent(org.publicID())
+
         if evt:
             evid = evt.publicID()
             pos = evid.find("#")  # XXX Hack!!!
@@ -586,12 +715,11 @@ class Bulletin(object):
 
         txt = ""
 
-        reg = seiscomp.seismology.Regions()
         if self.enhanced:
             depth = org.depth().value()
             sTime = org.time().value().toString("%Y/%m/%d  %H:%M:%S.%f00")[:24]
         else:
-            depth = int(org.depth().value()+0.5)
+            depth = int(org.depth().value() + 0.5)
             sTime = org.time().value().toString("%Y/%m/%d  %H:%M:%S.%f")[:22]
 
         tmp = {
@@ -601,23 +729,25 @@ class Bulletin(object):
             "lat": lat2str(org.latitude().value(), self.enhanced),
             "lon": lon2str(org.longitude().value(), self.enhanced),
             "dep": depth,
-            "reg": reg.getRegionName(org.latitude().value(), org.longitude().value()),
+            "reg": seiscomp.seismology.Regions.getRegionName(
+                org.latitude().value(), org.longitude().value()
+            ),
             # changed to properly report location method. (Marco Olivieri 21/06/2010)
             "method": org.methodID(),
             "model": org.earthModelID(),
             # end (MO)
-            "stat": "A"
+            "stat": "A",
         }
 
         try:
             if org.evaluationMode() == seiscomp.datamodel.MANUAL:
                 tmp["stat"] = "M"
-        except:
+        except ValueError:
             pass
 
         # dummy default
         tmp["mtyp"] = "M"
-        tmp["mval"] = 0.
+        tmp["mval"] = 0.0
 
         foundMag = False
         networkMagnitudeCount = org.magnitudeCount()
@@ -633,23 +763,24 @@ class Bulletin(object):
             mag = seiscomp.datamodel.Magnitude.Find(prefMagID)
             if mag is None and self._dbq:
                 o = self._dbq.loadObject(
-                    seiscomp.datamodel.Magnitude.TypeInfo(), prefMagID)
+                    seiscomp.datamodel.Magnitude.TypeInfo(), prefMagID
+                )
                 mag = seiscomp.datamodel.Magnitude.Cast(o)
 
             if mag:
                 tmp["mtyp"] = mag.type()
                 tmp["mval"] = mag.magnitude().value()
 
-# changed to properly report location method. (Marco Olivieri 21/06/2010)
-#        txt += """
-# Autoloc alert %(evid)s: determined by %(nsta)d stations, type %(stat)s
-#
-# LOCSAT solution (with start solution, %(nsta)d stations used, weight %(nsta)d):
-#
-#  %(reg)s  %(mtyp)s=%(mval).1f  %(time)s  %(lat)s  %(lon)s   %(dep)d km
-#
-#  Stat  Net   Date       Time          Amp    Per   Res  Dist  Az mb  ML  mB
-#""" % tmp
+        # changed to properly report location method. (Marco Olivieri 21/06/2010)
+        #        txt += """
+        # Autoloc alert %(evid)s: determined by %(nsta)d stations, type %(stat)s
+        #
+        # LOCSAT solution (with start solution, %(nsta)d stations used, weight %(nsta)d):
+        #
+        #  %(reg)s  %(mtyp)s=%(mval).1f  %(time)s  %(lat)s  %(lon)s   %(dep)d km
+        #
+        #  Stat  Net   Date       Time          Amp    Per   Res  Dist  Az mb  ML  mB
+        # """ % tmp
         txtFMT = """
   Alert %(evid)s: determined by %(nsta)d stations, type %(stat)s
 
@@ -668,7 +799,7 @@ class Bulletin(object):
 """
         txt += txtFMT % tmp
 
-# end (MO)
+        # end (MO)
         arrivals = self._getArrivalsSorted(org)
         pick = self._getPicks(org)
         ampl = self._getAmplitudes(org)
@@ -694,8 +825,10 @@ class Bulletin(object):
         lineFMT += " %s%s\n"
 
         for arr in arrivals:
-            if arr.weight() < self.minArrivalWeight:
+            wt = arrivalWeight(arr)
+            if wt < self.minArrivalWeight:
                 continue
+
             if self.distInKM:
                 dist = seiscomp.math.deg2km(arr.distance())
             else:
@@ -710,31 +843,31 @@ class Bulletin(object):
             net = wfid.networkCode()
             sta = wfid.stationCode()
             if self.enhanced:
-                tstr = p.time().value().toString(
-                    "%y/%m/%d  %H:%M:%S.%f00")[:22]
+                tstr = p.time().value().toString("%y/%m/%d  %H:%M:%S.%f00")[:22]
                 try:
                     res = "%7.3f" % arr.timeResidual()
-                except:
+                except ValueError:
                     res = "    N/A"
                 try:
                     azi = "%5.1f" % arr.azimuth()
-                except:
+                except ValueError:
                     azi = "  N/A"
             else:
                 tstr = p.time().value().toString("%y/%m/%d  %H:%M:%S.%f")[:20]
                 try:
                     res = "%5.1f" % arr.timeResidual()
-                except:
+                except ValueError:
                     res = "  N/A"
                 try:
                     azi = "%3.0f" % arr.azimuth()
-                except:
+                except ValueError:
                     azi = "N/A"
+
             pha = arr.phase().code()
             mstr = ""
-            amp = per = 0.
+            amp = per = 0.0
             for typ in ["mb", "ML", "mB"]:
-                mag = 0.
+                mag = 0.0
                 try:
                     m = stationMagnitudes[typ][sta]
                     mag = m.magnitude().value()
@@ -743,17 +876,19 @@ class Bulletin(object):
                         a = seiscomp.datamodel.Amplitude.Find(ampid)
                         if a is None and self._dbq:
                             obj = self._dbq.loadObject(
-                                seiscomp.datamodel.Amplitude.TypeInfo(), ampid)
+                                seiscomp.datamodel.Amplitude.TypeInfo(), ampid
+                            )
                             a = seiscomp.datamodel.Amplitude.Cast(obj)
                         if a:
                             per = a.period().value()
                             try:
                                 amp = a.amplitude().value()
-                            except:
+                            except ValueError:
                                 amp = -1
                 except KeyError:
                     pass
                 mstr += " %3.1f" % mag
+
             txt += lineFMT % (sta, net, tstr, amp, per, res, dist, azi, mstr)
 
         if self.enhanced:
@@ -761,23 +896,295 @@ class Bulletin(object):
         else:
             txt += "\n RMS-ERR:         %.2f\n\n" % org.quality().standardError()
 
-        try:
-            if self.enhanced:
-                tm = evt.creationInfo().creationTime().toString("%Y/%m/%d %H:%M:%S.%f")
-            else:
-                tm = evt.creationInfo().creationTime().toString("%Y/%m/%d %H:%M:%S")
-            txt += " First location:  %s\n" % tm
-        except:
-            pass
+        if evt:
+            try:
+                if self.enhanced:
+                    tm = (
+                        evt.creationInfo()
+                        .creationTime()
+                        .toString("%Y/%m/%d %H:%M:%S.%f")
+                    )
+                else:
+                    tm = evt.creationInfo().creationTime().toString("%Y/%m/%d %H:%M:%S")
+
+                txt += " Event created:       %s\n" % tm
+            except ValueError:
+                pass
 
         try:
             if self.enhanced:
                 tm = org.creationInfo().creationTime().toString("%Y/%m/%d %H:%M:%S.%f")
             else:
                 tm = org.creationInfo().creationTime().toString("%Y/%m/%d %H:%M:%S")
-            txt += " This location:   %s\n" % tm
-        except:
+            txt += " This origin created: %s\n" % tm
+        except ValueError:
             pass
+
+        return txt
+
+    def _printOriginKML(self, org):
+        txt = ""
+        evt = self._evt
+        if not evt and self._dbq:
+            evt = self._dbq.getEvent(org.publicID())
+
+        author = None
+        agencyID = None
+        eType = None
+        prefMagID = None
+        depth = None
+        altitude = None
+        sTime = None
+        mode = None
+        status = None
+        if evt:
+            evid = evt.publicID()
+            pos = evid.find("#")  # XXX Hack!!!
+            if pos != -1:
+                evid = evid[:pos]
+
+            try:
+                prefMagID = evt.preferredMagnitudeID()
+            except ValueError:
+                pass
+
+            try:
+                author = org.creationInfo().author()
+            except ValueError:
+                pass
+
+            try:
+                mode = seiscomp.datamodel.EEvaluationModeNames.name(
+                    org.evaluationMode()
+                )
+            except ValueError:
+                pass
+
+            try:
+                status = seiscomp.datamodel.EEvaluationStatusNames.name(
+                    org.evaluationStatus()
+                )
+            except ValueError:
+                pass
+
+            if self.useEventAgencyID:
+                try:
+                    agencyID = evt.creationInfo().agencyID()
+                except ValueError:
+                    pass
+            else:
+                try:
+                    agencyID = org.creationInfo().agencyID()
+                except ValueError:
+                    pass
+
+            try:
+                eType = seiscomp.datamodel.EEventTypeNames.name(evt.type())
+            except ValueError:
+                pass
+        else:
+            evid = ""
+            prefMagID = ""
+
+        if evt:
+            ID = evt.publicID()
+        else:
+            ID = org.publicID()
+
+        if self.enhanced:
+            latitude = "{:.3f}".format(org.latitude().value())
+            longitude = "{:.3f}".format(org.longitude().value())
+            depth = float("{:.3f}".format(org.depth().value()))
+            sTime = org.time().value().toString("%FT%T.%f")[:23]
+        else:
+            latitude = "{:.1f}".format(org.latitude().value())
+            longitude = "{:.1f}".format(org.longitude().value())
+            depth = float("{:.0f}".format(org.depth().value()))
+            sTime = org.time().value().toString("%FT%T.%f")[:21]
+
+        if depth:
+            altitude = -1.0 * float(depth)
+
+        try:
+            region = seiscomp.seismology.Regions.getRegionName(
+                org.latitude().value(), org.longitude().value()
+            )
+        except ValueError:
+            region = ""
+
+        mag = False
+        mType = ""
+        mVal = None
+        networkMagnitudeCount = org.magnitudeCount()
+        for i in range(networkMagnitudeCount):
+            mag = org.magnitude(i)
+            if mag.publicID() == prefMagID:
+                mType = mag.type()
+                mVal = "{:.1f}".format(mag.magnitude().value())
+                break
+
+        if not mag and prefMagID != "":
+            mag = seiscomp.datamodel.Magnitude.Find(prefMagID)
+            if mag is None and self._dbq:
+                o = self._dbq.loadObject(
+                    seiscomp.datamodel.Magnitude.TypeInfo(), prefMagID
+                )
+                mag = seiscomp.datamodel.Magnitude.Cast(o)
+
+            if mag:
+                mType = mag.type()
+                mVal = "{:.1f}".format(mag.magnitude().value())
+
+        txt = "<Placemark>"
+        txt += "<ExtendedData>"
+        if eType:
+            txt += f'<Data name="event type"><value>{eType}</value></Data>'
+        txt += f'<Data name="time [UTC]"><value>{sTime}</value></Data>'
+        if mVal:
+            txt += f'<Data name="magnitude ({mType})"><value>{mVal}</value></Data>'
+        else:
+            txt += '<Data name="magnitude"><value>None</value></Data>'
+        if len(region) > 0:
+            txt += f'<Data name="region"><value>{region}</value></Data>'
+        txt += f'<Data name="latitude [degree North]"><value>{latitude}</value></Data>'
+        txt += f'<Data name="longitude [degree East]"><value>{longitude}</value></Data>'
+        txt += f'<Data name="depth [km]"><value>{depth}</value></Data>'
+        if agencyID:
+            txt += f'<Data name="agency"><value>{agencyID}</value></Data>'
+        if author:
+            txt += f'<Data name="author"><value>{author}</value></Data>'
+        if mode:
+            txt += f'<Data name="mode"><value>{mode}</value></Data>'
+        if status:
+            txt += f'<Data name="status"><value>{status}</value></Data>'
+        txt += "</ExtendedData>"
+        txt += f"<name>{ID}</name>"
+        txt += "<styleUrl>#earthquake</styleUrl>"
+        # use icon scaling like in SC but devide by 10
+        if mVal:
+            size = 4.9 * (float(mVal) - 1.2) / 10.0
+        else:
+            size = 1
+        # scale symbolColor with depth
+        # global default: 0:FF0000,50:ffA500,100:FFFF00,250:00FF00,600:0000FF
+        if depth < 50:
+            symbolColor = "ff0000ff"
+        elif depth >= 50 and depth < 100:
+            symbolColor = "ff00a5ff"
+        elif depth >= 100 and depth < 250:
+            symbolColor = "ff00ffff"
+        elif depth >= 250 and depth < 600:
+            symbolColor = "ff00ff00"
+        else:
+            symbolColor = "ffff0000"
+        txt += f"<Style><IconStyle><scale>{size}</scale><color>{symbolColor}</color></IconStyle></Style>"
+        txt += f"<Point><coordinates>{longitude},{latitude},{altitude}</coordinates></Point>"
+        txt += f"<TimeStamp>{sTime}</TimeStamp>"
+        txt += "</Placemark>"
+
+        return txt
+
+    def _printOriginFDSN(self, org):
+        evt = self._evt
+
+        if not evt and self._dbq:
+            evt = self._dbq.getEvent(org.publicID())
+
+        author, agencyID, eType, prefMagID = "", "", "", ""
+        if evt:
+            evid = evt.publicID()
+            pos = evid.find("#")  # XXX Hack!!!
+            if pos != -1:
+                evid = evid[:pos]
+
+            try:
+                prefMagID = evt.preferredMagnitudeID()
+            except ValueError:
+                pass
+
+            try:
+                author = org.creationInfo().author()
+            except ValueError:
+                pass
+
+            if self.useEventAgencyID:
+                try:
+                    agencyID = evt.creationInfo().agencyID()
+                except ValueError:
+                    pass
+            else:
+                try:
+                    agencyID = org.creationInfo().agencyID()
+                except ValueError:
+                    pass
+
+            try:
+                eType = QMLTypeMapper.EventTypeToString(evt.type())
+            except ValueError:
+                pass
+        else:
+            evid = ""
+            prefMagID = ""
+
+        if self.enhanced:
+            depth = "{:.3f}".format(org.depth().value())
+            sTime = org.time().value().toString("%FT%T.%f")[:26]
+        else:
+            depth = "{:.0f}".format(org.depth().value())
+            sTime = org.time().value().toString("%FT%T.%f")[:23]
+
+        lat = lat2str(org.latitude().value(), self.enhanced)
+        lon = lon2str(org.longitude().value(), self.enhanced)
+
+        try:
+            region = seiscomp.seismology.Regions.getRegionName(
+                org.latitude().value(), org.longitude().value()
+            )
+        except ValueError:
+            region = ""
+
+        foundMag = False
+        mType, mVal, mAuthor = "", "", ""
+        networkMagnitudeCount = org.magnitudeCount()
+        for i in range(networkMagnitudeCount):
+            mag = org.magnitude(i)
+            if mag.publicID() == prefMagID:
+                mType = mag.type()
+                mVal = "{:.1f}".format(mag.magnitude().value())
+                foundMag = True
+                break
+
+        if not foundMag and prefMagID != "":
+            mag = seiscomp.datamodel.Magnitude.Find(prefMagID)
+            if mag is None and self._dbq:
+                o = self._dbq.loadObject(
+                    seiscomp.datamodel.Magnitude.TypeInfo(), prefMagID
+                )
+                mag = seiscomp.datamodel.Magnitude.Cast(o)
+
+            if mag:
+                mType = mag.type()
+                mVal = "{:.1f}".format(mag.magnitude().value())
+                try:
+                    mAuthor = mag.creationInfo().author()
+                except ValueError:
+                    pass
+
+        txt = "%s|%s|%s|%s|%s|%s||%s|%s|%s|%s|%s|%s|%s\n" % (
+            evid,
+            sTime,
+            lat,
+            lon,
+            depth,
+            author,
+            agencyID,
+            evid,
+            mType,
+            mVal,
+            mAuthor,
+            region,
+            eType,
+        )
 
         return txt
 
@@ -787,21 +1194,23 @@ class Bulletin(object):
             org = origin
         elif isinstance(origin, str):
             if self._dbq:
-                org = self._dbq.loadObject(
-                    seiscomp.datamodel.Origin.TypeInfo(), origin)
+                org = self._dbq.loadObject(seiscomp.datamodel.Origin.TypeInfo(), origin)
                 org = seiscomp.datamodel.Origin.Cast(org)
             if not org:
-                seiscomp.logging.error("origin '%s' not loaded" % origin)
-                return
+                raise KeyError("Unknown origin " + origin)
         else:
             raise TypeError("illegal type for origin")
 
-        if self.format == "autoloc1":
+        if self.format == "fdsnws":
+            return self._printOriginFDSN(org)
+        elif self.format == "autoloc1":
             return self._printOriginAutoloc1(org)
         elif self.format == "autoloc3":
             return self._printOriginAutoloc3(org, extra=False)
         elif self.format == "autoloc3extra":
             return self._printOriginAutoloc3(org, extra=True)
+        if self.format == "kml":
+            return self._printOriginKML(org)
         else:
             pass
 
@@ -810,32 +1219,24 @@ class Bulletin(object):
             evt = None
             if isinstance(event, seiscomp.datamodel.Event):
                 self._evt = event
-                org = seiscomp.datamodel.Origin.Find(
-                    event.preferredOriginID())
+                org = seiscomp.datamodel.Origin.Find(event.preferredOriginID())
                 if not org:
                     org = event.preferredOriginID()
                 return self.printOrigin(org)
             elif isinstance(event, str):
                 if self._dbq:
                     evt = self._dbq.loadObject(
-                        seiscomp.datamodel.Event.TypeInfo(), event)
+                        seiscomp.datamodel.Event.TypeInfo(), event
+                    )
                     evt = seiscomp.datamodel.Event.Cast(evt)
                     self._evt = evt
                 if evt is None:
-                    raise TypeError("unknown event '" + event + "'")
+                    raise KeyError("unknown event " + event)
                 return self.printOrigin(evt.preferredOriginID())
             else:
                 raise TypeError("illegal type for event")
         finally:
             self._evt = None
-
-
-def usage(exitcode=0):
-    usagetext = """
- scbulletin [ -E event-id | -O origin-os | --db-type database-type | --db-parameters database-connection]
-    """
-    sys.stderr.write("%s\n" % usagetext)
-    sys.exit(exitcode)
 
 
 class BulletinApp(seiscomp.client.Application):
@@ -848,63 +1249,142 @@ class BulletinApp(seiscomp.client.Application):
         self.setLoadRegionsEnabled(True)
 
         self.format = "autoloc1"
+        self.inputFile = None
 
     def createCommandLineDescription(self):
         try:
-            self.commandline().addGroup("Dump")
-            self.commandline().addStringOption("Dump", "event,E", "ID of event to dump")
-            self.commandline().addStringOption("Dump", "origin,O", "ID of origin to dump")
-            self.commandline().addStringOption("Dump", "weight,w",
-                                               "weight threshold for printed and counted picks")
-            self.commandline().addOption("Dump", "autoloc1,1", "autoloc1 format")
-            self.commandline().addOption("Dump", "autoloc3,3", "autoloc3 format")
-            self.commandline().addOption("Dump", "extra,x", "extra detailed autoloc3 format")
-            self.commandline().addOption("Dump", "enhanced,e",
-                                             "enhanced output precision for local earthquakes")
-            self.commandline().addOption("Dump", "polarities,p", "dump onset polarities")
-            self.commandline().addOption("Dump", "first-only",
-                                         "dump only the first event/origin")
-            self.commandline().addOption("Dump", "event-agency-id",
-                                         "use agency ID information from event instead of preferred origin")
-            self.commandline().addOption("Dump", "dist-in-km,k",
-                                         "plot distances in km instead of degree")
-
             self.commandline().addGroup("Input")
-            self.commandline().addStringOption("Input", "format,f",
-                                               "input format to use (xml [default], zxml (zipped xml), binary)")
             self.commandline().addStringOption(
-                "Input", "input,i", "input file, default: stdin")
-        except:
-            seiscomp.logging.warning(
-                "caught unexpected error %s" % sys.exc_info())
+                "Input",
+                "format,f",
+                "Input format to use (xml [default], zxml (zipped xml), binary).",
+            )
+            self.commandline().addStringOption(
+                "Input", "input,i", "Input file, default: stdin."
+            )
+
+            self.commandline().addGroup("Dump")
+            self.commandline().addStringOption(
+                "Dump",
+                "event,E",
+                "ID of event(s) to dump. Separate multiple IDs by comma.",
+            )
+            self.commandline().addStringOption(
+                "Dump",
+                "origin,O",
+                "ID of origin(s) to dump. Separate multiple IDs by comma.",
+            )
+            self.commandline().addOption(
+                "Dump",
+                "event-agency-id",
+                "Use agency ID information from event instead of preferred origin.",
+            )
+            self.commandline().addOption(
+                "Dump",
+                "first-only",
+                "Dump only the first event/origin. "
+                "Expects input from file or stdin.",
+            )
+            self.commandline().addOption(
+                "Dump", "polarities,p", "Dump onset polarities."
+            )
+            self.commandline().addStringOption(
+                "Dump", "weight,w", "Weight threshold for printed and counted picks."
+            )
+
+            self.commandline().addGroup("Output")
+            self.commandline().addOption("Output", "autoloc1,1", "Format: autoloc1.")
+            self.commandline().addOption("Output", "autoloc3,3", "Format: autoloc3.")
+            self.commandline().addOption(
+                "Output",
+                "fdsnws,4",
+                "Format: FDSNWS event text, e.g., for generating catalogs.",
+            )
+            self.commandline().addOption(
+                "Output",
+                "kml,5",
+                "Format: KML, GIS file format.",
+            )
+            self.commandline().addOption(
+                "Output",
+                "enhanced,e",
+                "Enhanced output precision for local earthquakes.",
+            )
+            self.commandline().addOption(
+                "Output", "dist-in-km,k", "Print distances in km instead of degree."
+            )
+            self.commandline().addStringOption(
+                "Output",
+                "output,o",
+                "Name of output file. If not given, all event parameters are printed to stdout.",
+            )
+            self.commandline().addOption(
+                "Output", "extra,x", "Extra detailed autoloc3 format."
+            )
+        except RuntimeError:
+            seiscomp.logging.warning("caught unexpected error %s" % sys.exc_info())
 
         return True
 
     def validateParameters(self):
-        if seiscomp.client.Application.validateParameters(self) == False:
+        if not seiscomp.client.Application.validateParameters(self):
             return False
 
-        if not self.commandline().hasOption("event") and not self.commandline().hasOption("origin"):
+        try:
+            self.inputFile = self.commandline().optionString("input")
+        except RuntimeError:
+            self.inputFile = None
+
+        if self.inputFile:
             self.setDatabaseEnabled(False, False)
 
+        if not self.commandline().hasOption(
+            "event"
+        ) and not self.commandline().hasOption("origin"):
+            self.setDatabaseEnabled(False, False)
+
+        return True
+
+    def printUsage(self):
+        print(
+            """Usage:
+  scbulletin [options]
+
+Generate bulletins from events or origins in various formats: autoloc1, autoloc3, fdsnws, kml."""
+        )
+
+        seiscomp.client.Application.printUsage(self)
+
+        print(
+            """Examples:
+Create a bulletin from one event in the seiscomp database
+  scbulletin -d mysql://sysop:sysop@localhost/seiscomp -E gempa2012abcd
+
+Create a bulletin from event parameters in XML
+  scbulletin -i gempa2012abcd.xml
+"""
+        )
         return True
 
     def run(self):
         evid = None
         orid = None
         mw = None
+        inputFile = None
+        txt = None
+        outputFile = None
 
         try:
             evid = self.commandline().optionString("event")
-        except:
+        except RuntimeError:
             pass
 
         try:
             orid = self.commandline().optionString("origin")
-        except:
+        except RuntimeError:
             pass
 
-        if evid != "" or orid != "":
+        if evid != "" or orid != "" or not self.inputFile:
             dbq = seiscomp.datamodel.DatabaseQuery(self.database())
         else:
             dbq = None
@@ -914,7 +1394,7 @@ class BulletinApp(seiscomp.client.Application):
 
         try:
             mw = self.commandline().optionString("weight")
-        except:
+        except RuntimeError:
             pass
 
         if mw != "" and mw is not None:
@@ -927,6 +1407,12 @@ class BulletinApp(seiscomp.client.Application):
                 bulletin.format = "autoloc3extra"
             else:
                 bulletin.format = "autoloc3"
+
+        if self.commandline().hasOption("fdsnws"):
+            bulletin.format = "fdsnws"
+
+        if self.commandline().hasOption("kml"):
+            bulletin.format = "kml"
 
         if self.commandline().hasOption("enhanced"):
             bulletin.enhanced = True
@@ -941,22 +1427,43 @@ class BulletinApp(seiscomp.client.Application):
             bulletin.distInKM = True
 
         try:
-            if evid:
-                txt = bulletin.printEvent(evid)
-            elif orid:
-                txt = bulletin.printOrigin(orid)
-            else:
-                inputFormat = "xml"
-                inputFile = "-"
+            outputFile = self.commandline().optionString("output")
+        except RuntimeError:
+            pass
 
-                try:
-                    inputFile = self.commandline().optionString("input")
-                except:
-                    pass
+        inputFile = self.inputFile
 
+        if not self.inputFile:
+            txt = ""
+            try:
+                if evid:
+                    for ev in evid.split(","):
+                        try:
+                            txt += bulletin.printEvent(ev)
+                        except ValueError:
+                            seiscomp.logging.error("Unknown event '%s'" % ev)
+                elif orid:
+                    for org in orid.split(","):
+                        try:
+                            txt += bulletin.printOrigin(org)
+                        except ValueError:
+                            seiscomp.logging.error("Unknown origin '%s'" % org)
+                else:
+                    inputFile = "-"
+                    print("Expecting input in XML from stdin", file=sys.stderr)
+
+            except Exception as exc:
+                print("ERROR: {}".format(exc), file=sys.stderr)
+                # return False
+        else:
+            inputFile = self.inputFile
+
+        if inputFile:
+            inputFormat = "xml"
+            try:
                 try:
                     inputFormat = self.commandline().optionString("format")
-                except:
+                except RuntimeError:
                     pass
 
                 if inputFormat == "xml":
@@ -967,51 +1474,114 @@ class BulletinApp(seiscomp.client.Application):
                 elif inputFormat == "binary":
                     ar = seiscomp.io.BinaryArchive()
                 else:
-                    raise TypeError("unknown input format '" + inputFormat + "'")
+                    raise TypeError("unknown input format: " + inputFormat)
 
-                if ar.open(inputFile) == False:
-                    raise IOError(inputFile + ": unable to open")
+                if not ar.open(inputFile):
+                    raise IOError("Unable to open input file " + inputFile)
 
                 obj = ar.readObject()
                 if obj is None:
-                    raise TypeError(inputFile + ": invalid format")
+                    raise IOError("Invalid format in " + inputFile)
 
                 ep = seiscomp.datamodel.EventParameters.Cast(obj)
                 if ep is None:
-                    raise TypeError(inputFile + ": no eventparameters found")
+                    raise TypeError("No event parameters found in " + inputFile)
 
                 if ep.eventCount() <= 0:
                     if ep.originCount() <= 0:
-                        raise TypeError(inputFile + ": no origin and no event in eventparameters found")
+                        raise TypeError(
+                            "No origin and no event in event "
+                            "parameters found in " + inputFile
+                        )
+
+                    if self.commandline().hasOption("first-only"):
+                        org = ep.origin(0)
+                        txt = bulletin.printOrigin(org)
                     else:
-                        if self.commandline().hasOption("first-only"):
-                            org = ep.origin(0)
-                            txt = bulletin.printOrigin(org)
-                        else:
-                            txt = ""
-                            for i in range(ep.originCount()):
-                                org = ep.origin(i)
-                                txt += bulletin.printOrigin(org)
+                        txt = ""
+                        for i in range(ep.originCount()):
+                            org = ep.origin(i)
+                            if orid and org.publicID() not in orid:
+                                seiscomp.logging.error(
+                                    "%s: Skipping origin with ID %s"
+                                    % (inputFile, org.publicID())
+                                )
+                                continue
+                            txt += bulletin.printOrigin(org)
                 else:
                     if self.commandline().hasOption("first-only"):
                         ev = ep.event(0)
                         if ev is None:
-                            raise TypeError(inputFile + ": invalid event")
+                            raise TypeError("Invalid event in " + inputFile)
 
-                        txt = bulletin.printEvent(ev)
+                        try:
+                            txt = bulletin.printEvent(ev)
+                        except KeyError:
+                            raise TypeError("Unknown event")
+                    elif orid:
+                        txt = ""
+                        for oid in orid.split(","):
+                            org = ep.findOrigin(oid)
+                            if org:
+                                txt += bulletin.printOrigin(org)
+                            else:
+                                seiscomp.logging.error(
+                                    "%s: Skipping origin with ID %s" % (inputFile, oid)
+                                )
                     else:
                         txt = ""
                         for i in range(ep.eventCount()):
                             ev = ep.event(i)
-                            txt += bulletin.printEvent(ev)
+                            if evid and ev.publicID() not in evid:
+                                seiscomp.logging.error(
+                                    "%s: Skipping event with ID %s"
+                                    % (inputFile, ev.publicID())
+                                )
+                                continue
 
-        except Exception as exc:
-            sys.stderr.write("ERROR: " + str(exc) + "\n")
-            raise
-            return False
+                            try:
+                                txt += bulletin.printEvent(ev)
+                            except KeyError:
+                                raise TypeError("Unknown event")
+
+            except Exception as exc:
+                seiscomp.logging.error("%s" % str(exc))
+                return False
+
+        if outputFile:
+            print(f"Output data to file: {outputFile}", file=sys.stderr)
+            try:
+                out = open(outputFile, "w")
+            except Exception:
+                print("Cannot create output file {outputFile}", file=sys.stderr)
+                return -1
+        else:
+            out = sys.stdout
+
+        if bulletin.format == "fdsnws":
+            print(
+                "#EventID|Time|Latitude|Longitude|Depth/km|Author|"
+                "Catalog|Contributor|ContributorID|MagType|Magnitude|"
+                "MagAuthor|EventLocationName|EventType",
+                file=out,
+            )
+
+        if bulletin.format == "kml":
+            text = createKML("open")
+            if text:
+                print(f"{text}", file=out)
+            else:
+                return False
 
         if txt:
-            sys.stdout.write("%s\n" % txt)
+            print(f"{txt}", file=out)
+
+        if bulletin.format == "kml":
+            text = createKML("close")
+            if text:
+                print(f"{text}", file=out)
+            else:
+                return False
 
         return True
 

@@ -45,6 +45,8 @@
 #include <seiscomp/math/filter.h>
 #include <seiscomp/math/conversions.h>
 
+#include <cmath>
+
 #include "types.h"
 #include "infowidget.h"
 
@@ -141,7 +143,7 @@ void addEventWidgetRowData(EventTableWidget::RowData& rowData,
 	QString longitudeValue = QString("%1").arg((longitude <= 0) ? longitude * (-1.0) : longitude);
 	QString longitudeOrientation = QString("%1").arg((longitude <= 0) ? "W" : "E");
 
-	QString depth = QString("%1 km").arg(static_cast<int> (Math::round(origin->depth())));
+	QString depth = QString("%1 km").arg(static_cast<int>(round(origin->depth())));
 
 	rowData[EventTableWidget::EVENT_ID]     = eventId;
 	rowData[EventTableWidget::ORIGIN_TIME]  = originTime;
@@ -243,7 +245,7 @@ void setInfoWidgetContent(StationInfoWidget* infoWidget, StationData* stationDat
 
 void setInfoWidgetContent(OriginInfoWidget* infoWidget, const std::string &eventID,
                           const DataModel::Origin* origin,
-                          const std::string& preferredMagnitudeId) {
+                          const OPT(double) magnitudeValue) {
 	infoWidget->setPreferredOriginId(origin->publicID().c_str());
 
 	QString time = Gui::timeToString(origin->time().value(), "%F - %T");
@@ -259,12 +261,11 @@ void setInfoWidgetContent(OriginInfoWidget* infoWidget, const std::string &event
 	infoWidget->setDepth(depth);
 
 	QString magnitude;
-	for ( size_t i = 0; i < origin->magnitudeCount(); i++ ) {
-		DataModel::Magnitude* magnitudeRef = origin->magnitude(i);
-		if ( magnitudeRef->publicID() == preferredMagnitudeId ) {
-			magnitude = QString("%1").arg(magnitudeRef->magnitude(), 0, 'f', 2);
-			break;
-		}
+	if ( magnitudeValue ) {
+		magnitude = QString("%1").arg(*magnitudeValue, 0, 'f', 2);
+	}
+	else {
+		magnitude = QString("%1").arg("None");
 	}
 	infoWidget->setMagnitude(magnitude);
 
@@ -548,10 +549,9 @@ bool MvMainWindow::init() {
 	if ( SCApp->commandline().hasOption("displaymode") ) {
 		displayMode = SCApp->commandline().option<std::string>("displaymode");
 	}
-
 	_displayMode = selectDisplayModeFromString(displayMode);
-	bool isDisplayModeStringInvalid = _displayMode == NONE && !displayMode.empty();
-	if ( isDisplayModeStringInvalid ) {
+
+	if ( (_displayMode == NONE) && (!displayMode.empty()) ) {
 		SEISCOMP_ERROR("Invalid displaymode found: %s", displayMode.c_str());
 		return false;
 	}
@@ -569,22 +569,28 @@ bool MvMainWindow::init() {
 	_triggerHandler.setPickLifeSpan(_configStationPickCacheLifeSpan);
 
 	if ( !readStationsFromDataBase() ) {
-		SEISCOMP_ERROR("Could not read stations from database");
-		return false;
+		SEISCOMP_INFO("Could not read stations from database");
 	}
 
 	try {
 		_configStationRecordFilterStr = SCApp->configGetString("stations.groundMotionFilter");
 	} catch ( Config::Exception& ) {}
 
-	StationDataCollection::iterator stationIt = _stationDataCollection.begin();
-	for ( ; stationIt != _stationDataCollection.end(); ++stationIt ) {
-		stationIt->gmFilter = StationData::GmFilterPtr(Math::Filtering::InPlaceFilter<double>::Create(_configStationRecordFilterStr));
-		if ( !stationIt->gmFilter ) {
-			SEISCOMP_ERROR("Could not create filter: %s",
-			               _configStationRecordFilterStr.c_str());
-			return false;
+	if ( !_configStationRecordFilterStr.empty() ) {
+		SEISCOMP_DEBUG("Applying ground motion filter to records: '%s'",
+		               _configStationRecordFilterStr.c_str());
+		StationDataCollection::iterator stationIt = _stationDataCollection.begin();
+		for ( ; stationIt != _stationDataCollection.end(); ++stationIt ) {
+			stationIt->gmFilter = StationData::GmFilterPtr(Math::Filtering::InPlaceFilter<double>::Create(_configStationRecordFilterStr));
+			if ( !stationIt->gmFilter ) {
+				SEISCOMP_ERROR("Could not create filter: %s",
+				               _configStationRecordFilterStr.c_str());
+				return false;
+			}
 		}
+	}
+	else {
+		SEISCOMP_DEBUG("Do not filter records: no filter configured");
 	}
 
 	if ( !initRecordStream() ) {
@@ -783,6 +789,11 @@ void MvMainWindow::setupStandardUi() {
 
 	connect(&_mapUpdateTimer, SIGNAL(timeout()), this, SLOT(updateMap()));
 
+	if ( SCApp->isMessagingEnabled() || SCApp->isDatabaseEnabled() ) {
+		_ui.menuSettings->addAction(_actionShowSettings);
+	}
+
+	_ui.menuView->addAction(_actionToggleFullScreen);
 	_mapUpdateTimer.start(_mapUpdateInterval);
 
 	_eventModeControls[DataModel::EEvaluationModeQuantity] = _ui.actionEventsModeUnset;
@@ -940,7 +951,7 @@ bool MvMainWindow::handleMapContextMenu(QContextMenuEvent* contextMenuEvent) {
 QAction* MvMainWindow::createAndConfigureContextMenuAction(const QString &title, Gui::Map::Symbol *mapSymbol) {
 	QAction* action = new QAction(title, NULL);
 
-	QVariant variant = qVariantFromValue(static_cast<void*>(mapSymbol));
+	QVariant variant = QVariant::fromValue(static_cast<void*>(mapSymbol));
 	action->setData(variant);
 
 	connect(action, SIGNAL(triggered()), this, SLOT(showInfoWidget()));
@@ -1094,7 +1105,10 @@ void MvMainWindow::changeView(int index) {
 bool MvMainWindow::readStationsFromDataBase() {
 	// Read configured streams
 	DataModel::ConfigModule *module = SCApp->configModule();
-	if ( !module ) return false;
+	if ( !module ) {
+		SEISCOMP_INFO("Cannot find global bindings for stations");
+		return false;
+	}
 
 	std::map<std::string, StationData> stations;
 
@@ -1177,7 +1191,11 @@ bool MvMainWindow::readStationsFromDataBase() {
 			if ( it == stations.end() ) continue;
 
 			it->second.stationRef = station;
-			it->second.stationSymbolRef = new MvStationSymbol(lat, lon, _annotationLayer->annotations()->add("TEST"));
+			it->second.stationSymbolRef = new MvStationSymbol(
+				_mapWidget->canvas().symbolCollection(),
+				lat, lon,
+				_annotationLayer->annotations()->add("")
+			);
 			it->second.stationSymbolRef->setType(StationSymbolType);
 			it->second.stationSymbolRef->setID(it->second.id);
 			it->second.stationSymbolRef->setNetworkCode(station->network()->code());
@@ -1819,8 +1837,13 @@ void MvMainWindow::updateInfoWidget(const DataModel::Event* event) {
 
 	std::string originId = event->preferredOriginID();
 	DataModel::Origin* origin = _eventDataRepository.findOrigin(originId);
+	DataModel::Magnitude *magnitude = _eventDataRepository.findMagnitude(event->preferredMagnitudeID());
+	OPT(double) magnitudeValue;
+	if ( magnitude ) {
+		magnitudeValue = magnitude->magnitude().value();
+	}
 
-	setInfoWidgetContent(infoWidget, eventId, origin, event->preferredMagnitudeID());
+	setInfoWidgetContent(infoWidget, eventId, origin, magnitudeValue);
 	infoWidget->updateContent();
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -2192,8 +2215,12 @@ void MvMainWindow::showInfoWidget() {
 
 		std::string preferredOriginId = eventData->object()->preferredOriginID();
 		DataModel::Origin *origin = _eventDataRepository.findOrigin(preferredOriginId);
-
-		setInfoWidgetContent(infoWidget, eventId, origin, eventData->object()->preferredMagnitudeID());
+		DataModel::Magnitude *magnitude = _eventDataRepository.findMagnitude(eventData->object()->preferredMagnitudeID());
+		OPT(double) magnitudeValue;
+		if ( magnitude ) {
+			magnitudeValue = magnitude->magnitude().value();
+		}
+		setInfoWidgetContent(infoWidget, eventId, origin, magnitudeValue);
 		::showInfoWidget(infoWidget);
 	}
 }

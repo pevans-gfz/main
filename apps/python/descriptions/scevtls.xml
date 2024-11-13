@@ -3,6 +3,9 @@
 	<module name="scevtls" category="Utilities">
 		<description>List event IDs from database.</description>
 		<command-line>
+			<synopsis>
+				scevtls [options]
+			</synopsis>
 			<group name="Generic">
 				<optionReference>generic#help</optionReference>
 				<optionReference>generic#version</optionReference>
@@ -29,22 +32,58 @@
 				<optionReference>database#db-disable</optionReference>
 			</group>
 
+			<group name="Input">
+				<option flag="i" long-flag="input" argument="arg">
+					<description>
+					Name of input XML file. Read from stdin if '-' is given.
+					Deactivates reading events from database.
+					</description>
+				</option>
+			</group>
+
 			<group name="Events">
 				<option long-flag="begin" argument="time">
 					<description>
-					Specify the lower bound of the time interval. Format is
-					&quot;2012-01-01 00:00:00&quot;.
+					Specify the lower bound of the time interval. Format:
+					2012-01-01T00:00:00.
 					</description>
 				</option>
 				<option long-flag="end" argument="time">
 					<description>
-					Specify the upper bound of the time interval. Format is
-					&quot;2012-01-01 00:00:00&quot;.
+					Specify the upper bound of the time interval. Format:
+					2012-01-01T00:00:00.
 					</description>
 				</option>
-				<option long-flag="delimiter" flag="D" argument="string" default="\n">
+				<option long-flag="hours" argument="arg">
 					<description>
-					Specify the delimiter of the resulting event ids.
+					Start searching given hours before now. If set, --begin and
+					--end are ignored.
+					</description>
+				</option>
+				<option long-flag="modified-after" argument="time">
+					<description>
+					Print IDs of events modified after the specified time.
+					</description>
+				</option>
+				<option long-flag="event-type" argument="arg">
+					<description>
+					The event type for filtering events.
+					Use quotes for types with more than one word.
+					Example: "mining explosion".
+					</description>
+				</option>
+			</group>
+
+			<group name="Output">
+				<option long-flag="delimiter" flag="D" argument="string">
+					<description>
+					Specify the delimiter of the resulting event IDs.
+					</description>
+				</option>
+				<option long-flag="preferred-origin" flag="p" argument="">
+					<description>
+					Print the ID of the preferred origin along with the event
+					ID.
 					</description>
 				</option>
 			</group>

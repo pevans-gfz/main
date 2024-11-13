@@ -7,7 +7,7 @@ import seiscomp.kernel
 
 class Module(seiscomp.kernel.Module):
     def __init__(self, env):
-        seiscomp.kernel.Module.__init__(self, env, env.moduleName(__file__))
+        super().__init__(env, env.moduleName(__file__))
 
     def supportsAliases(self):
         # The default handler does not support aliases
@@ -15,30 +15,29 @@ class Module(seiscomp.kernel.Module):
 
     def reload(self):
         if not self.isRunning():
-            self.env.log('{} is not running'.format(self.name))
+            self.env.log(f"{self.name} is not running")
             return 1
 
-        self.env.log('reloading {}'.format(self.name))
+        self.env.log(f"reloading {self.name}")
 
         lockfile = self.env.lockFile(self.name)
-        reloadfile = os.path.join(os.path.dirname(lockfile),
-                                  '{}.reload'.format(self.name))
+        reloadfile = os.path.join(os.path.dirname(lockfile), f"{self.name}.reload")
 
         # Open pid file
-        with open(lockfile, "r") as f:
+        with open(lockfile, "r", encoding="utf-8") as f:
             # Try to read the pid
             pid = int(f.readline())
 
             # touch reload file
-            open(reloadfile, 'a').close()
+            with open(reloadfile, "a", encoding="utf-8") as _:
+                pass
 
             if not os.path.isfile(reloadfile):
-                self.env.log('could not touch reload file: {}' \
-                             .format(reloadfile))
+                self.env.log(f"could not touch reload file: {reloadfile}")
                 return 1
 
             # Send SIGHUP
-            subprocess.call("kill -s HUP %d" % pid, shell=True)
+            subprocess.call(f"kill -s HUP {pid}", shell=True)
 
             # wait for reload file to disappear
             for _ in range(0, int(self.reloadTimeout * 5)):
@@ -46,9 +45,10 @@ class Module(seiscomp.kernel.Module):
                 if not os.path.isfile(reloadfile):
                     return 0
 
-            self.env.log('timeout exceeded')
+            self.env.log("timeout exceeded")
 
         return 1
+
 
 # Uncomment for authbind (running service on privileged ports)
 #  def _run(self):

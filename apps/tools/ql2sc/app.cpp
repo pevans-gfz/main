@@ -21,6 +21,7 @@
 #include <seiscomp/datamodel/amplitude.h>
 #include <seiscomp/datamodel/event.h>
 #include <seiscomp/datamodel/focalmechanism.h>
+#include <seiscomp/datamodel/momenttensor.h>
 #include <seiscomp/datamodel/pick.h>
 #include <seiscomp/datamodel/magnitude.h>
 #include <seiscomp/datamodel/origin.h>
@@ -56,7 +57,7 @@ namespace QL2SC {
 namespace {
 
 
-typedef Diff3::PropertyIndex PropertyIndex;
+using PropertyIndex = Diff3::PropertyIndex;
 
 
 PropertyIndex CreationInfoIndex;
@@ -88,22 +89,36 @@ Core::Time getLastModificationTime(const T *o) {
 }
 
 
-class MyDiff : public Diff3 {
+class MyDiff : public Diff4 {
 	public:
-		MyDiff() {}
+		MyDiff(const Config &cfg) : _cfg(cfg) {}
 
 	protected:
 		bool blocked(const Core::BaseObject *o, LogNode *node, bool local) {
+			auto po = PublicObject::ConstCast(o);
+			if ( po ) {
+				if ( _cfg.publicIDFilter.isDenied(po->publicID()) ) {
+					if ( node && node->level() >= LogNode::DIFFERENCES )
+						node->addChild(o2t(o), "SKIP (" + string(local?"local":"remote") +
+						               " publicID '" + po->publicID() + "' blocked)");
+					return true;
+				}
+			}
+
 			const Core::MetaProperty *prop = 0;
 			PropertyIndex::const_iterator it = CreationInfoIndex.find(o->className());
 			if ( it == CreationInfoIndex.end() ) {
-				if ( o->meta() )
+				if ( o->meta() ) {
 					prop = o->meta()->property("creationInfo");
+					CreationInfoIndex[o->className()] = prop;
+				}
 			}
 			else
 				prop = it->second;
 
-			if ( !prop ) return false;
+			if ( !prop ) {
+				return false;
+			}
 
 			string agencyID;
 
@@ -130,19 +145,22 @@ class MyDiff : public Diff3 {
 		bool confirmUpdate(const Core::BaseObject *localO,
 		                   const Core::BaseObject *remoteO,
 		                   LogNode *node) {
-			const Core::MetaProperty *prop = 0;
-			PropertyIndex::const_iterator it = CreationInfoIndex.find(localO->className());
+			const Core::MetaProperty *prop = nullptr;
+			auto it = CreationInfoIndex.find(localO->className());
 			if ( it == CreationInfoIndex.end() ) {
 				if ( localO->meta() ) {
 					prop = localO->meta()->property("creationInfo");
 					CreationInfoIndex[localO->className()] = prop;
 				}
 			}
-			else
+			else {
 				prop = it->second;
+			}
 
 			// No creationInfo, no creationTime check possible
-			if ( !prop ) return true;
+			if ( !prop ) {
+				return true;
+			}
 
 			try {
 				Core::MetaValue v;
@@ -158,7 +176,7 @@ class MyDiff : public Diff3 {
 					Core::Time localMTime = getLastModificationTime(*ciLocal);
 					Core::Time remoteMTime = getLastModificationTime(*ciRemote);
 
-					if ( remoteMTime < localMTime ) {
+					if ( localMTime >= remoteMTime ) {
 						if ( node && node->level() >= LogNode::OPERATIONS )
 							node->setMessage("SKIP UPDATE due to modification time");
 						return false;
@@ -169,13 +187,80 @@ class MyDiff : public Diff3 {
 
 			return true;
 		}
+
+		bool confirmRemove(const Core::BaseObject *localO,
+		                   LogNode *node) override {
+			const Core::MetaProperty *prop = nullptr;
+
+			if ( _cfg.allowRemoval ) {
+				return true;
+			}
+
+			auto it = CreationInfoIndex.find(localO->className());
+			if ( it == CreationInfoIndex.end() ) {
+				if ( localO->meta() ) {
+					prop = localO->meta()->property("creationInfo");
+					CreationInfoIndex[localO->className()] = prop;
+				}
+			}
+			else {
+				prop = it->second;
+			}
+
+			if ( !prop ) {
+				// If the object does not have a creationInfo then it is considered
+				// a part of the parent and is allowed to be removed.
+				return true;
+			}
+
+			if ( node ) {
+				node->addChild(o2t(localO), "SKIP REMOVE due to configuration");
+			}
+
+			return false;
+		}
+
+		bool confirmDescent(const Core::BaseObject *,
+		                    const Core::BaseObject *,
+		                    bool updateConfirmed,
+		                    const Core::MetaProperty *prop,
+		                    LogNode *) override {
+			// If the object type of the child property does not contain
+			// a creationInfo then we consider that as part of the object
+			// and do not descent if the update of the parent is not
+			// confirmed. Otherwise pass the modification check on to the
+			// childs.
+			if ( prop->isClass() && !prop->type().empty() ) {
+				const Core::MetaProperty *propCreationInfo = nullptr;
+				auto it = CreationInfoIndex.find(prop->type());
+				if ( it == CreationInfoIndex.end() ) {
+					auto meta = Core::MetaObject::Find(prop->type());
+					if ( meta ) {
+						propCreationInfo = meta->property("creationInfo");
+						CreationInfoIndex[prop->type()] = propCreationInfo;
+					}
+				}
+				else {
+					propCreationInfo = it->second;
+				}
+
+				if ( propCreationInfo ) {
+					return true;
+				}
+			}
+
+			return updateConfirmed;
+		}
+
+	private:
+		const Config &_cfg;
 };
 
 
 template<typename Container> class container_source {
 	public:
-		typedef typename Container::value_type  char_type;
-		typedef io::source_tag                  category;
+		using char_type = typename Container::value_type;
+		using category = io::source_tag;
 		container_source(const Container& container)
 		 : _con(container), _pos(0) {}
 		streamsize read(char_type* s, streamsize n) {
@@ -190,7 +275,7 @@ template<typename Container> class container_source {
 		}
 		Container& container() { return _con; }
 	private:
-		typedef typename Container::size_type   size_type;
+		using size_type = typename Container::size_type;
 		const Container&  _con;
 		size_type   _pos;
 };
@@ -515,19 +600,29 @@ void App::done() {
 	Core::Time until = Core::Time::GMT();
 	until += 10.0;
 
-//	// Request shutdown of clients
-//	for ( QLClients::iterator it = _clients.begin();
-//	      it != _clients.end(); ++it )
-//		(*it)->abort();
+	// Flush delayed events
+	for ( auto &it : _eventDelayBuffer ) {
+		auto item = it.second;
+		auto ep = item.ep;
+		auto event = item.event;
+		auto config = item.config;
+		auto &routing = config->routingTable;
+
+		Notifiers journals;
+		// No event routing, forward event attributes
+		syncEvent(ep.get(), event, &routing,
+		          journals, config->syncPreferred);
+		sendJournals(journals);
+	}
 
 	// Disconnect from messaging
 	Client::Application::done();
 
 	// Wait for threads to terminate
 	if ( _ep.empty() ) {
-		for ( QLClients::iterator it = _clients.begin();
-		      it != _clients.end(); ++it )
-			(*it)->join(until);
+		for ( auto client : _clients ) {
+			client->join(until);
+		}
 	}
 
 	SEISCOMP_INFO("application finished");
@@ -569,6 +664,9 @@ bool App::dispatchNotification(int type, Core::BaseObject *obj) {
 	}
 
 	bool res = dispatchResponse(client, msg);
+	// The cache is only maintained for one particular dispatch run because
+	// updates of all objects are not captured.
+	_cache.clear();
 
 	// Allow new responses
 	_clientPublishMutex.unlock();
@@ -677,13 +775,41 @@ bool App::dispatchResponse(QLClient *client, const IO::QuakeLink::Response *msg)
 
 	if ( !_test ) {
 		if ( sendNotifiers(notifiers, routing) ) {
-			if ( config->syncEventAttributes ){
-				Notifiers journals;
-				// No event routing, forward event attributes
-				for ( size_t i = 0; i < ep->eventCount(); ++i )
-					syncEvent(ep.get(), ep->event(i), &routing,
-					          journals, config->syncPreferred);
-				sendJournals(journals);
+			if ( config->syncEventAttributes ) {
+				if ( config->syncEventDelay > 0 ) {
+					for ( size_t i = 0; i < ep->eventCount(); ++i ) {
+						auto event = ep->event(i);
+						auto itp = _eventDelayBuffer.insert({
+							event->publicID(), {
+								ep, event, config,
+								// Add one to incorporate the current
+								// running ticker.
+								config->syncEventDelay + 1
+							}
+						});
+
+						if ( !itp.second ) {
+							// Element exists already, update the contents
+							itp.first->second.ep = ep;
+							itp.first->second.event = event;
+							SEISCOMP_INFO("%s: updated delay buffer",
+							              event->publicID(), config->syncEventDelay);
+						}
+						else {
+							SEISCOMP_INFO("%s: synchronization delayed for %ds",
+							              event->publicID(), config->syncEventDelay);
+						}
+					}
+				}
+				else {
+					Notifiers journals;
+					// No event routing, forward event attributes
+					for ( size_t i = 0; i < ep->eventCount(); ++i ) {
+						syncEvent(ep.get(), ep->event(i), &routing,
+						          journals, config->syncPreferred);
+					}
+					sendJournals(journals);
+				}
 			}
 			client->setLastUpdate(msg->timestamp);
 			writeLastUpdates();
@@ -759,6 +885,32 @@ void App::handleTimeout() {
 			// Just wake up the event queue
 			sendNotification(Client::Notification(-1));
 		}
+
+		return;
+	}
+
+	for ( auto it = _eventDelayBuffer.begin(); it != _eventDelayBuffer.end(); ) {
+		auto &item = it->second;
+		--item.timeout;
+		if ( item.timeout <= 0 ) {
+			auto ep = item.ep;
+			auto event = item.event;
+			auto config = item.config;
+			auto &routing = config->routingTable;
+
+			Notifiers journals;
+			SEISCOMP_DEBUG("%s: synchronize delayed event",
+			               event->publicID());
+			// No event routing, forward event attributes
+			syncEvent(ep.get(), event, &routing,
+			          journals, config->syncPreferred);
+			sendJournals(journals);
+
+			it = _eventDelayBuffer.erase(it);
+		}
+		else {
+			++it;
+		}
 	}
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -783,7 +935,7 @@ void App::diffPO(T *remotePO, const string &parentID, Notifiers &notifiers,
 		PublicObjectCacheFeeder(_cache).feed(localPO.get(), true);
 	}
 
-	MyDiff diff;
+	MyDiff diff(_config);
 	diff.diff(localPO.get(), remotePO, parentID, notifiers, logNode);
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -850,6 +1002,23 @@ void App::syncEvent(const EventParameters *ep, const Event *event,
 		SEISCOMP_ERROR("No database query available for event attribute synchronization");
 		return;
 	}
+
+	auto origin = ep->findOrigin(event->preferredOriginID());
+	if ( !origin ) {
+		SEISCOMP_ERROR("Remote preferred origin '%s' not found: skipping event synchronization",
+		               event->preferredOriginID().c_str());
+		return;
+	}
+
+	try {
+		if ( isAgencyIDBlocked(origin->creationInfo().agencyID()) ) {
+			SEISCOMP_DEBUG("Remote preferred origin '%s' agencyID '%s' is blocked: skipping event synchronization",
+			               origin->publicID().c_str(),
+			               origin->creationInfo().agencyID().c_str());
+			return;
+		}
+	}
+	catch ( ... ) {}
 
 	EventPtr targetEvent = query()->getEvent(event->preferredOriginID());
 	if ( !targetEvent ) {
@@ -953,17 +1122,49 @@ void App::syncEvent(const EventParameters *ep, const Event *event,
 			if ( prefMag ) {
 				SEISCOMP_DEBUG("* check update of preferred magnitude type: '%s'",
 				               prefMag->type().c_str());
+
+				bool isMw = false;
+
+				// Check if the preferred magnitude is part of a moment tensor
+				if ( prefMag->type() == "Mw" ) {
+					for ( size_t i = 0; i < ep->focalMechanismCount(); ++i ) {
+						auto fm = ep->focalMechanism(i);
+						for ( size_t j = 0; j < fm->momentTensorCount(); ++j ) {
+							auto mt = fm->momentTensor(j);
+							if ( mt->derivedOriginID() == prefMag->origin()->publicID() ) {
+								isMw = true;
+								i = ep->focalMechanismCount();
+								break;
+							}
+						}
+					}
+				}
+
 				entry = getLastJournalEntry(*query(), targetEvent->publicID(), "EvPrefMagType");
-				if ( !entry || entry->sender() == author() ) {
-					entry = createJournalEntry(targetEvent->publicID(), "EvPrefMagType", prefMag->type());
-					notifiers.push_back(
-						new Notifier("Journaling", OP_ADD, entry.get())
-					);
+				if ( entry && entry->sender() != author() ) {
+					SEISCOMP_INFO("* skipping setting preferred magnitude type because it "
+					              "has been set already via EvPrefMagType by %s",
+					              entry->sender().c_str());
 				}
 				else {
-					SEISCOMP_INFO("* skipping setting preferred magnitude type because it "
-					              "has been set already by %s",
-					              entry->sender().c_str());
+					entry = getLastJournalEntry(*query(), targetEvent->publicID(), "EvPrefMw");
+					if ( entry && entry->sender() != author() ) {
+						SEISCOMP_INFO("* skipping setting preferred magnitude type because it "
+						              "has been set already via EvPrefMw by %s",
+						              entry->sender().c_str());
+					}
+					else {
+						if ( isMw ) {
+							SEISCOMP_DEBUG("* preferred magnitude is Mw of a moment tensor, send EvPrefMw");
+							entry = createJournalEntry(targetEvent->publicID(), "EvPrefMw", "true");
+						}
+						else {
+							entry = createJournalEntry(targetEvent->publicID(), "EvPrefMagType", prefMag->type());
+						}
+						notifiers.push_back(
+							new Notifier("Journaling", OP_ADD, entry.get())
+						);
+					}
 				}
 			}
 			else {
@@ -1176,8 +1377,12 @@ bool App::sendNotifiers(const Notifiers &notifiers, const RoutingTable &routing)
 	      it != notifiers.end(); ++it) {
 		Notifier *n = it->get();
 
-		// check if a routing exists
-		if ( !resolveRouting(group, n->object(), routing) ) continue;
+		// check if a route exists
+		if ( !resolveRouting(group, n->object(), routing) ) {
+			SEISCOMP_DEBUG("Skip %s of %s: no routing",
+			               n->operation().toString(), n->object()->className());
+			continue;
+		}
 
 		// the message has to be send if the batchSize is exceeded or the
 		// message group changed
@@ -1227,7 +1432,7 @@ bool App::sendNotifiers(const Notifiers &notifiers, const RoutingTable &routing)
 			++msgTotal;
 			ss << "  " << it->first << ": " << it->second << endl;
 		}
-		SEISCOMP_INFO("send %i notifer (ADD: %i, UPDATE: %i, REMOVE: %i) "
+		SEISCOMP_INFO("send %i notifiers (ADD: %i, UPDATE: %i, REMOVE: %i) "
 		              "to the following message groups:\n%s",
 		              add + update + remove, add, update, remove,
 		              ss.str().c_str());

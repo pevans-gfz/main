@@ -31,7 +31,7 @@
 
 #include <seiscomp/processing/amplitudeprocessor.h>
 
-#include <boost/bind.hpp>
+#include <functional>
 #include <iomanip>
 
 
@@ -73,11 +73,6 @@ bool AmpTool::CompareWaveformStreamID::operator()(
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 AmpTool::AmpTool(int argc, char **argv) : StreamApplication(argc, argv) {
-	_fExpiry = 1.0; // one hour cache initially
-	_fetchMissingAmplitudes = true;
-	_minWeight = 0.5;
-	_forceReprocessing = false;
-
 	setAutoApplyNotifierEnabled(true);
 	setInterpretNotifierEnabled(true);
 
@@ -92,14 +87,10 @@ AmpTool::AmpTool(int argc, char **argv) : StreamApplication(argc, argv) {
 
 	setAutoAcquisitionStart(false);
 
-	_initialAcquisitionTimeout = 30;
-	_runningAcquisitionTimeout = 2;
-
 	_amplitudeTypes.insert("MLv");
 	_amplitudeTypes.insert("mb");
 	_amplitudeTypes.insert("mB");
-
-	_cache.setPopCallback(boost::bind(&AmpTool::removedFromCache, this, _1));
+	_cache.setPopCallback(bind(&AmpTool::removedFromCache, this, placeholders::_1));
 
 	_errorChannel = NULL;
 	_errorOutput = NULL;
@@ -124,21 +115,39 @@ AmpTool::~AmpTool() {
 void AmpTool::createCommandLineDescription() {
 	Application::createCommandLineDescription();
 
-	commandline().addOption("Messaging", "test", "Test mode, no messages are sent");
-	commandline().addOption("Generic", "expiry,x", "Time span in hours after which objects expire", &_fExpiry, true);
-	commandline().addOption("Generic", "origin-id,O", "OriginID to calculate amplitudes for", &_originID, true);
-	commandline().addOption("Generic", "dump-records", "Dumps the filtered traces to ASCII when using -O");
+	commandline().addOption("Messaging", "test", "Test mode, no messages are sent.");
+	commandline().addOption("Generic", "expiry,x",
+	                        "Time span in hours after which objects expire.", &_fExpiry, true);
+	commandline().addOption("Generic", "origin-id,O",
+	                        "OriginID to calculate amplitudes for.", &_originID, true);
+	commandline().addOption("Generic", "dump-records",
+	                        "Dumps the filtered traces to ASCII when using -O.");
 
 	commandline().addGroup("Input");
-	commandline().addOption("Input", "ep", "Event parameters XML file for offline processing of all contained origins",
+	commandline().addOption("Input", "ep",
+	                        "Event parameters XML file for offline processing of "
+	                        "all contained origins.",
 	                        &_epFile);
-	commandline().addOption("Input", "reprocess", "Reprocess and update existing (non manual) amplitudes in combination with --ep");
+	commandline().addOption("Input", "picks,p",
+	                        "Force measuring amplitudes for picks only. Origins "
+	                        "are ignored and time windows are independent of "
+	                        "distance. Works only in combination with --ep.");
+	commandline().addOption("Input", "reprocess",
+	                        "Reprocess and update existing (non manual)"
+	                        "amplitudes in combination with --ep.");
 
 	commandline().addGroup("Reprocess");
-	commandline().addOption("Reprocess", "force", "Force reprocessing of amplitudes even if they are manual");
-	commandline().addOption("Reprocess", "start-time", "Start time for amplitude request window", &_strTimeWindowStartTime);
-	commandline().addOption("Reprocess", "end-time", "End time for amplitude request window", &_strTimeWindowEndTime);
-	commandline().addOption("Reprocess", "commit", "Send amplitude updates to the messaging otherwise an XML document will be output");
+	commandline().addOption("Reprocess", "force",
+	                        "Force reprocessing of amplitudes even if they are manual.");
+	commandline().addOption("Reprocess", "start-time",
+	                        "Start time for amplitude request window.",
+	                        &_strTimeWindowStartTime);
+	commandline().addOption("Reprocess", "end-time",
+	                        "End time for amplitude request window.",
+	                        &_strTimeWindowEndTime);
+	commandline().addOption("Reprocess", "commit",
+	                        "Send amplitude updates to the messaging otherwise"
+	                        "an XML document will be output.");
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -147,6 +156,10 @@ void AmpTool::createCommandLineDescription() {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool AmpTool::validateParameters() {
+	if ( !Application::validateParameters() ) {
+		return false;
+	}
+
 	_testMode = commandline().hasOption("test");
 
 	if ( !_originID.empty() && _testMode )
@@ -182,6 +195,9 @@ bool AmpTool::initConfiguration() {
 	try { _minWeight = configGetDouble("amptool.minimumPickWeight"); }
 	catch ( ... ) {}
 
+	try { _replaceWaveformIDWithBindings = configGetBool("amptool.streamFromBindings"); }
+	catch ( ... ) {}
+
 	try { _initialAcquisitionTimeout = configGetDouble("amptool.initialAcquisitionTimeout"); }
 	catch ( ... ) {}
 
@@ -190,7 +206,9 @@ bool AmpTool::initConfiguration() {
 
 	_dumpRecords = commandline().hasOption("dump-records");
 	_reprocessAmplitudes = commandline().hasOption("reprocess");
+	_picks = commandline().hasOption("picks");
 	_forceReprocessing = commandline().hasOption("force");
+
 
 	return true;
 }
@@ -203,6 +221,11 @@ bool AmpTool::initConfiguration() {
 bool AmpTool::init() {
 	if ( !StreamApplication::init() )
 		return false;
+
+	if ( _picks && _epFile.empty() ) {
+		SC_FMT_ERROR("--picks is only allowed with --ep");
+		return false;
+	}
 
 	_inputPicks = addInputObjectLog("pick");
 	_inputAmps = addInputObjectLog("amplitude");
@@ -254,7 +277,7 @@ bool AmpTool::init() {
 	SEISCOMP_INFO("\nAmplitudes to calculate:\n%s", logAmplTypes.c_str());
 
 	_timer.setTimeout(1);
-	_timer.setCallback(boost::bind(&AmpTool::handleTimeout, this));
+	_timer.setCallback(bind(&AmpTool::handleTimeout, this));
 
 	return true;
 }
@@ -274,7 +297,7 @@ bool AmpTool::run() {
 
 		_fetchMissingAmplitudes = false;
 		query()->loadArrivals(org.get());
-		process(org.get());
+		process(org.get(), nullptr);
 		return true;
 	}
 
@@ -323,14 +346,13 @@ bool AmpTool::run() {
 		cerr << "Collecting picks ... " << flush;
 		DatabaseIterator db_it = query()->getObjectIterator(dbQuery, Pick::TypeInfo());
 		ObjectPtr obj;
-		while ( obj = db_it.get() ) {
+		while ( (obj = db_it.get()) ) {
 			Pick *pick = static_cast<Pick*>(obj.get());
 			try {
 				pick->waveformID().networkCode();
 				pick->waveformID().stationCode();
 				pick->waveformID().locationCode();
 				pick->waveformID().channelCode();
-
 				pick->time().value();
 			}
 			catch ( ... ) {
@@ -373,7 +395,7 @@ bool AmpTool::run() {
 			_report << "   + " << pick->publicID() << std::endl;
 			cerr << "[" << idx << "]" << " " << (*it)->publicID() << endl;
 			db_it = query()->getAmplitudesForPick((*it)->publicID());
-			while ( obj = db_it.get() ) {
+			while ( (obj = db_it.get()) ) {
 				Amplitude *amp = static_cast<Amplitude*>(obj.get());
 				cerr << "  [" << setw(10) << left << amp->type() << "]  ";
 
@@ -391,7 +413,7 @@ bool AmpTool::run() {
 					dbAmps[amp->type()] = amp;
 					proc->setTrigger(pick->time().value());
 					proc->setReferencingPickID(pick->publicID());
-					proc->setPublishFunction(boost::bind(&AmpTool::storeLocalAmplitude, this, _1, _2));
+					proc->setPublishFunction(bind(&AmpTool::storeLocalAmplitude, this, placeholders::_1, placeholders::_2));
 					_report << "     + Data" << std::endl;
 					addProcessor(proc.get(), NULL, pick.get(), None, None, None);
 				}
@@ -516,11 +538,23 @@ bool AmpTool::run() {
 			}
 		}
 
-		for ( size_t i = 0; i < _ep->originCount(); ++i ) {
-			OriginPtr org = _ep->origin(i);
-			SEISCOMP_INFO("Processing origin %s", org->publicID().c_str());
-			process(org.get());
-			if ( isExitRequested() ) break;
+		if ( _picks) {
+			for ( size_t i = 0; i < _ep->pickCount(); ++i ) {
+				PickPtr pick = _ep->pick(i);
+				SEISCOMP_INFO("Processing pick %s", pick->publicID().c_str());
+				process(nullptr, pick.get());
+				if ( isExitRequested() ) {
+					break;
+				}
+			}
+		}
+		else {
+			for ( size_t i = 0; i < _ep->originCount(); ++i ) {
+				OriginPtr org = _ep->origin(i);
+				SEISCOMP_INFO("Processing origin %s", org->publicID().c_str());
+				process(org.get(), nullptr);
+				if ( isExitRequested() ) break;
+			}
 		}
 
 		ar.create("-");
@@ -593,7 +627,7 @@ void AmpTool::updateObject(const std::string &parentID, Object* object) {
 	Origin *origin = Origin::Cast(object);
 	if ( origin ) {
 		logObject(_inputOrgs, Time::GMT());
-		process(origin);
+		process(origin, nullptr);
 		return;
 	}
 }
@@ -635,13 +669,29 @@ void AmpTool::removeObject(const std::string &parentID, Object* object) {
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-void AmpTool::process(Origin *origin) {
-	if ( !origin ) return;
+void AmpTool::process(Origin *origin, Pick *pickInput) {
+	if ( origin && pickInput ) {
+		SEISCOMP_ERROR("Provide either origin or pick, not both");
+		return;
+	}
 
-	if ( Private::status(origin) == REJECTED ) {
+	if ( origin && Private::status(origin) == REJECTED ) {
 		SEISCOMP_INFO("Ignoring origin %s with status = REJECTED",
 		              origin->publicID().c_str());
 		return;
+	}
+
+	PickPtr pick = nullptr;
+	if ( pickInput ){
+		pick = pickInput;
+		try {
+			if ( pick->evaluationStatus() == REJECTED ) {
+				SEISCOMP_INFO("Ignoring pick %s with status = REJECTED",
+				              pick->publicID().c_str());
+				return;
+			}
+		}
+		catch ( Core::ValueException& ) {}
 	}
 
 	if ( _amplitudeTypes.empty() ) {
@@ -668,51 +718,81 @@ void AmpTool::process(Origin *origin) {
 
 	_ampIDReuse.clear();
 
-	_report << std::endl;
-	_report << "Processing report for Origin: " << origin->publicID() << std::endl;
-	_report << "-----------------------------------------------------------------" << std::endl;
+	if ( origin ) {
+		_report << std::endl;
+		_report << "Processing report for Origin: " << origin->publicID() << std::endl;
+		_report << "-----------------------------------------------------------------" << std::endl;
 
-	_report << " + Arrivals" << endl;
+		_report << " + Arrivals" << endl;
 
-	if ( (origin->arrivalCount() == 0) && query() )
-		query()->loadArrivals(origin);
-
-	for ( size_t i = 0; i < origin->arrivalCount(); ++i ) {
-		Arrival *arr = origin->arrival(i);
-		const string &pickID = arr->pickID();
-
-		double weight = Private::arrivalWeight(arr);
-
-		if ( Private::shortPhaseName(arr->phase().code()) != 'P' || weight < _minWeight ) {
-			SEISCOMP_INFO("Ignoring pick '%s' weight=%.1f phase=%s",
-			              pickID.c_str(), weight, arr->phase().code().c_str());
-			continue;
+		if ( (origin->arrivalCount() == 0) && query() ) {
+			query()->loadArrivals(origin);
 		}
 
-		PickPtr pick = _cache.get<Pick>(pickID);
-		if ( !pick ) {
-			SEISCOMP_LOG(_errorChannel, "Pick '%s' not found", pickID.c_str());
-			_report << "   - " << pickID << " [pick not found]" << std::endl;
-			continue;
+		for ( size_t i = 0; i < origin->arrivalCount(); ++i ) {
+			Arrival *arr = origin->arrival(i);
+			const string &pickID = arr->pickID();
+
+			double weight = Private::arrivalWeight(arr);
+
+			if ( Private::shortPhaseName(arr->phase().code()) != 'P' || weight < _minWeight ) {
+				SEISCOMP_INFO("Ignoring pick '%s' weight=%.1f phase=%s",
+				              pickID.c_str(), weight, arr->phase().code().c_str());
+				continue;
+			}
+
+			pick = _cache.get<Pick>(pickID);
+			if ( !pick ) {
+				SEISCOMP_LOG(_errorChannel, "Pick '%s' not found", pickID.c_str());
+				_report << "   - " << pickID << " [pick not found]" << std::endl;
+				continue;
+			}
+
+			DataModel::WaveformStreamID wfid = pick->waveformID();
+			// Strip the component code because every AmplitudeProcessor
+			// will use its own component to pick the amplitude on
+			wfid.setChannelCode(wfid.channelCode().substr(0,2));
+
+			string streamID = Private::toStreamID(wfid);
+
+			double distance;
+			try {
+				distance = Private::arrivalDistance(arr);
+			}
+			catch ( Core::ValueException& ) {
+				SEISCOMP_LOG(_errorChannel, "Arrival.distance not set for %s pick %s: skip it",
+				                 streamID.c_str(), pickID.c_str());
+				_report << "   - " << pickID << " [Arrival.distance not set]" << std::endl;
+				continue;
+			}
+
+			PickStreamEntry &e = pickStreamMap[streamID];
+
+			// When there is already a pick registered for this stream which has
+			// been picked earlier, ignore the current pick
+			if ( e.first && e.first->time().value() < pick->time().value() ) {
+				continue;
+			}
+
+			e.first = pick;
+			e.second = distance;
 		}
+	}
+	else if ( pick ) {
+		_report << std::endl;
+		_report << "Processing report for Pick: " << pick->publicID() << std::endl;
+		_report << "-----------------------------------------------------------------" << std::endl;
 
 		DataModel::WaveformStreamID wfid = pick->waveformID();
 		// Strip the component code because every AmplitudeProcessor
 		// will use its own component to pick the amplitude on
 		wfid.setChannelCode(wfid.channelCode().substr(0,2));
-
 		string streamID = Private::toStreamID(wfid);
 		PickStreamEntry &e = pickStreamMap[streamID];
-
-		// When there is already a pick registered for this stream which has
-		// been picked earlier, ignore the current pick
-		if ( e.first && e.first->time().value() < pick->time().value() )
-			continue;
-
 		e.first = pick;
-		e.second = Private::arrivalDistance(arr);
+		// there is no distance for picks without origins
+		e.second = 0.0;
 	}
-
 
 	for ( PickStreamMap::iterator it = pickStreamMap.begin(); it != pickStreamMap.end(); ++it ) {
 		PickCPtr pick = it->second.first;
@@ -724,14 +804,16 @@ void AmpTool::process(Origin *origin) {
 		AmplitudeRange amps = getAmplitudes(pickID);
 
 		_report << "   + " << pickID << ", " << Private::toStreamID(pick->waveformID()) << std::endl;
-		try {
-			depth = origin->depth().value();
-			_report << "     + depth = " << origin->depth() << std::endl;
+		if ( origin ) {
+			try {
+				depth = origin->depth().value();
+				_report << "     + depth = " << depth.get() << std::endl;
+			}
+			catch ( ... ) {
+				_report << "     - depth [not set]" << std::endl;
+			}
+			_report << "     + distance = " << distance << std::endl;
 		}
-		catch ( ... ) {
-			_report << "     - depth [not set]" << std::endl;
-		}
-		_report << "     + distance = " << distance << std::endl;
 
 		for ( AmplitudeList::iterator ait = _amplitudeTypes.begin();
 		      ait != _amplitudeTypes.end(); ++ait ) {
@@ -766,20 +848,32 @@ void AmpTool::process(Origin *origin) {
 				continue;
 			}
 
-			if ( existingAmp )
+			if ( existingAmp ) {
 				_ampIDReuse[proc.get()] = existingAmp;
+			}
 
 			proc->setTrigger(pickTime);
 			proc->setReferencingPickID(pickID);
 
-			int res = addProcessor(proc.get(), origin, pick.get(), distance, depth, (double) origin->time().value());
+			int res = -1;
+			if ( origin ) {
+				res = addProcessor(proc.get(), origin, pick.get(), distance, depth, (double) origin->time().value());
+			}
+			else {
+				SC_FMT_DEBUG("Measuring {} amplitude for pick {} independent of origin",
+				             ait->c_str(), pick->publicID().c_str());
+				res = addProcessor(proc.get(), nullptr, pick.get(), None, None, None);
+			}
+
 			if ( res < 0 ) {
 				// RecordStream not available
-				if ( res == -2 ) return;
+				if ( res == -2 ) {
+					return;
+				}
 				continue;
 			}
 
-			proc->setPublishFunction(boost::bind(&AmpTool::emitAmplitude, this, _1, _2));
+			proc->setPublishFunction(bind(&AmpTool::emitAmplitude, this, placeholders::_1, placeholders::_2));
 		}
 	}
 
@@ -799,11 +893,14 @@ void AmpTool::process(Origin *origin) {
 			                          req.timeWindow.endTime());
 		}
 
+		SC_FMT_DEBUG("{} time window: {} - {}",
+		             it->first, req.timeWindow.startTime().toString("%F %T"),
+		             req.timeWindow.endTime().toString("%F %T"));
 		_report << " + TimeWindow (" << it->first << "): " << req.timeWindow.startTime().toString("%F %T")
 		        << ", " << req.timeWindow.endTime().toString("%F %T") << std::endl;
 	}
 
-	SEISCOMP_INFO("set stream timeout to 30 seconds");
+	SEISCOMP_INFO("Set stream timeout to %f seconds", _initialAcquisitionTimeout);
 	_acquisitionTimeout = _initialAcquisitionTimeout;
 	_firstRecord = true;
 
@@ -816,7 +913,9 @@ void AmpTool::process(Origin *origin) {
 	SEISCOMP_INFO("Starting timeout monitor");
 	_timer.start();
 	readRecords(false);
-	if ( _timer.isActive() ) _timer.stop();
+	if ( _timer.isActive() ) {
+		_timer.stop();
+	}
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -836,8 +935,9 @@ int AmpTool::addProcessor(Processing::AmplitudeProcessor *proc,
 	std::string stationID = pick->waveformID().networkCode() + "." +
 	                        pick->waveformID().stationCode();
 	ParameterMap::iterator it = _parameters.find(stationID);
-	if ( it != _parameters.end() )
+	if ( it != _parameters.end() ) {
 		params = it->second.get();
+	}
 	else if ( configModule() != NULL ) {
 		for ( size_t i = 0; i < configModule()->configStationCount(); ++i ) {
 			ConfigStation *station = configModule()->configStation(i);
@@ -895,12 +995,38 @@ int AmpTool::addProcessor(Processing::AmplitudeProcessor *proc,
 
 	std::string streamIDs[3];
 	WaveformStreamID cwids[3];
+	WaveformStreamID wid = pick->waveformID();
+
+	// Adjust waveformID with bindings
+	if ( _replaceWaveformIDWithBindings && params ) {
+		string tmp;
+		if ( params->getString(tmp, "detecLocid") ) {
+			wid.setLocationCode(tmp);
+		}
+		if ( params->getString(tmp, "detecStream") ) {
+			wid.setChannelCode(tmp);
+		}
+	}
 
 	Client::Inventory *inv = Client::Inventory::Instance();
 	DataModel::ThreeComponents tc;
 	if ( inv ) {
 		try {
-			tc = inv->getThreeComponents(pick);
+			DataModel::SensorLocation *loc = inv->getSensorLocation(
+				wid.networkCode(), wid.stationCode(),
+				wid.locationCode(), pick->time().value()
+			);
+
+			if ( !loc ) {
+				throw Core::ValueException("sensor location not found");
+			}
+
+			if ( wid.channelCode().size() >= 3 ) {
+				DataModel::getThreeComponents(tc, loc, wid.channelCode().substr(0, wid.channelCode().size()-1).c_str(), pick->time().value());
+			}
+			else {
+				DataModel::getThreeComponents(tc, loc, wid.channelCode().c_str(), pick->time().value());
+			}
 		}
 		catch ( ... ) {}
 	}
@@ -908,10 +1034,12 @@ int AmpTool::addProcessor(Processing::AmplitudeProcessor *proc,
 	DataModel::SensorLocation *receiver = NULL;
 
 	for ( int i = 0; i < componentCount; ++i ) {
-		cwids[i] = pick->waveformID();
+		cwids[i] = wid;
+
 		if ( tc.comps[components[i]] == NULL ) {
-			SEISCOMP_LOG(_errorChannel, "no inventory information found for %s -> ignoring Arrival %s",
-			             streamIDs[i].c_str(), pick->publicID().c_str());
+			SEISCOMP_LOG(_errorChannel, "%s: no inventory information found for %s (%d) -> ignoring Arrival %s",
+			             proc->type().c_str(),
+			             Private::toStreamID(cwids[i]).c_str(), i, pick->publicID().c_str());
 			_report << "   - " << proc->type().c_str() << " [streams not found]" << std::endl;
 			return -1;
 		}
@@ -920,8 +1048,8 @@ int AmpTool::addProcessor(Processing::AmplitudeProcessor *proc,
 		streamIDs[i] = Private::toStreamID(cwids[i]);
 
 		if ( cwids[i].channelCode().empty() ) {
-			SEISCOMP_LOG(_errorChannel, "invalid channel code in %s -> ignoring Arrival %s",
-			             streamIDs[i].c_str(), pick->publicID().c_str());
+			SEISCOMP_LOG(_errorChannel, "%s: invalid channel code in %s -> ignoring Arrival %s",
+			             proc->type().c_str(), streamIDs[i].c_str(), pick->publicID().c_str());
 			_report << "   - " << proc->type().c_str() << " [invalid channel code]" << std::endl;
 			return -1;
 		}
@@ -945,8 +1073,8 @@ int AmpTool::addProcessor(Processing::AmplitudeProcessor *proc,
 			receiver = tc.comps[components[i]]->sensorLocation();
 
 		if ( proc->streamConfig(components[i]).gain == 0.0 ) {
-			SEISCOMP_LOG(_errorChannel, "no gain found for %s -> ignoring Arrival %s",
-			             streamIDs[i].c_str(), pick->publicID().c_str());
+			SEISCOMP_LOG(_errorChannel, "%s: no gain found for %s -> ignoring Arrival %s",
+			             proc->type().c_str(), streamIDs[i].c_str(), pick->publicID().c_str());
 			_report << "     - " << proc->type().c_str() << " [gain not found]" << std::endl;
 			return -1;
 		}
@@ -957,39 +1085,29 @@ int AmpTool::addProcessor(Processing::AmplitudeProcessor *proc,
 	if ( !proc->setup(
 		Settings(
 			configModuleName(),
-			pick->waveformID().networkCode(),
-			pick->waveformID().stationCode(),
-			pick->waveformID().locationCode(),
-			pick->waveformID().channelCode().substr(0,2),
+			wid.networkCode(),
+			wid.stationCode(),
+			wid.locationCode(),
+			wid.channelCode().substr(0,2),
 			&configuration(), params)) ) {
 		_report << "     - " << proc->type().c_str() << " [setup failed]" << std::endl;
 		return -1;
 	}
 
-	proc->setEnvironment(origin, receiver, pick);
-
-	if ( depth ) {
-		proc->setHint(WaveformProcessor::Depth, *depth);
-		if ( proc->isFinished() ) {
-			_report << "     - " << proc->type() << " [" << proc->status().toString() << " (" << proc->statusValue() << ")]" << std::endl;
-			return -1;
-		}
+	if ( origin ) {
+		proc->setEnvironment(origin, receiver, pick);
 	}
-
-	if ( distance ) {
-		proc->setHint(WaveformProcessor::Distance, *distance);
-		if ( proc->isFinished() ) {
-			_report << "     - " << proc->type() << " [" << proc->status().toString() << " (" << proc->statusValue() << ")]" << std::endl;
-			return -1;
-		}
-	}
-
-	if ( originTime ) {
-		proc->setHint(WaveformProcessor::Time, *originTime);
-		if ( proc->isFinished() ) {
-			_report << "     - " << proc->type() << " [" << proc->status().toString() << " (" << proc->statusValue() << ")]" << std::endl;
-			return -1;
-		}
+	else {
+		const std::string &n = wid.networkCode();
+		const std::string &s = wid.stationCode();
+		const std::string &l = wid.locationCode();
+		proc->setEnvironment(
+			nullptr, // No hypocenter information
+			Client::Inventory::Instance()->getSensorLocation(
+				n, s, l, proc->trigger()
+			),
+			pick
+		);
 	}
 
 	proc->computeTimeWindow();
@@ -1178,20 +1296,22 @@ AmpTool::createAmplitude(const Seiscomp::Processing::AmplitudeProcessor *proc,
 		DataModel::TimeWindow(res.time.reference, res.time.begin, res.time.end)
 	);
 
-	if ( res.component <= WaveformProcessor::SecondHorizontal )
+	if ( res.component <= WaveformProcessor::SecondHorizontal ) {
 		amp->setWaveformID(
 			WaveformStreamID(
 				res.record->networkCode(), res.record->stationCode(),
 				res.record->locationCode(), proc->streamConfig((WaveformProcessor::Component)res.component).code(), ""
 			)
 		);
-	else
+	}
+	else {
 		amp->setWaveformID(
 			WaveformStreamID(
 				res.record->networkCode(), res.record->stationCode(),
 				res.record->locationCode(), res.record->channelCode().substr(0,2), ""
 			)
 		);
+	}
 
 	amp->setPickID(proc->referencingPickID());
 
@@ -1250,11 +1370,13 @@ void AmpTool::emitAmplitude(const AmplitudeProcessor *proc,
 		else
 			nmsg->attach(new Notifier("EventParameters", OP_ADD, amp.get()));
 
-		if ( nmsg && !nmsg->empty() )
+		if ( nmsg && !nmsg->empty() ) {
 			connection()->send(nmsg.get());
+		}
 	}
-	else if ( !_originID.empty() || _testMode )
+	else if ( !_originID.empty() || _testMode ) {
 		cerr << *amp << endl;
+	}
 	else if ( _ep ) {
 		if ( it == _ampIDReuse.end() ) {
 			_ep->add(amp.get());
@@ -1308,7 +1430,8 @@ void AmpTool::storeLocalAmplitude(const Seiscomp::Processing::AmplitudeProcessor
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool AmpTool::storeRecord(Record *rec) {
 	if ( _firstRecord ) {
-		SEISCOMP_INFO("Data request: got first record, set timeout to 2 seconds");
+		SEISCOMP_INFO("Data request: got first record, set timeout to %f seconds",
+		              _runningAcquisitionTimeout);
 		_noDataTimer.restart();
 		_acquisitionTimeout = _runningAcquisitionTimeout;
 		_firstRecord = false;

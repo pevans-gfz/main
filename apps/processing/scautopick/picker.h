@@ -45,17 +45,19 @@ class App : public Processing::Application {
 
 
 	protected:
-		void createCommandLineDescription();
-		bool validateParameters();
-		bool initConfiguration();
+		void createCommandLineDescription() override;
+		bool validateParameters() override;
+		bool initConfiguration() override;
 
-		bool init();
-		bool run();
-		void done();
+		bool init() override;
+		bool run() override;
+		void done() override;
 
-		void addObject(const std::string& parentID, DataModel::Object* o);
-		void removeObject(const std::string& parentID, DataModel::Object* o);
-		void updateObject(const std::string& parentID, DataModel::Object* o);
+		void addObject(const std::string& parentID, DataModel::Object* o) override;
+		void removeObject(const std::string& parentID, DataModel::Object* o) override;
+		void updateObject(const std::string& parentID, DataModel::Object* o) override;
+
+		void handleNewStream(const Record *rec) override;
 
 
 	private:
@@ -76,9 +78,9 @@ class App : public Processing::Application {
 		                   const DataModel::WaveformStreamID &waveformID,
 		                   bool metaDataRequired);
 
-		bool initDetector( const std::string &streamID,
+		bool initDetector(const std::string &streamID,
 		                   const DataModel::WaveformStreamID &waveformID,
-		                   const Core::Time &time);
+		                   const Record *rec);
 
 		bool addFeatureExtractor(Seiscomp::DataModel::Pick *pick,
 		                         DataModel::Amplitude *amp,
@@ -89,7 +91,12 @@ class App : public Processing::Application {
 		                           const Record *rec,
 		                           const Seiscomp::DataModel::Pick *pick);
 
-		void handleNewStream(const Record *rec);
+		template <typename T>
+		void pushProcessor(const std::string &networkCode,
+		                   const std::string &stationCode,
+		                   const std::string &locationCode,
+		                   T *proc);
+
 		void processorFinished(const Record *rec, Processing::WaveformProcessor *wp);
 
 		void emitTrigger(const Processing::Detector *pickProc,
@@ -99,7 +106,8 @@ class App : public Processing::Application {
 		                   const Record *rec, const Core::Time& time);
 
 		void emitPPick(const Processing::Picker *,
-		               const Processing::Picker::Result &);
+		               const Processing::Picker::Result &,
+		               double duration);
 
 		void emitSPick(const Processing::SecondaryPicker *,
 		               const Processing::SecondaryPicker::Result &);

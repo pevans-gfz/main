@@ -12,10 +12,10 @@
  ***************************************************************************/
 
 
-
 #define SEISCOMP_COMPONENT ScImport
 #include "import.h"
 
+#include <functional>
 #include <vector>
 
 #include <seiscomp/logging/log.h>
@@ -213,11 +213,11 @@ Client::Result Import::connectToSink(const string &sink) {
 		}
 	}
 	else {
-		SEISCOMP_ERROR("Unknown import mode: %i", _mode);
+		SEISCOMP_ERROR("Unknown import mode: %i", static_cast<int>(_mode));
 		return Client::Error;
 	}
 
-	_sinkMessageThread = new boost::thread(boost::bind(&Import::readSinkMessages, this));
+	_sinkMessageThread = new thread(bind(&Import::readSinkMessages, this));
 
 	// Print routing table
 	for ( auto it : _routingTable )

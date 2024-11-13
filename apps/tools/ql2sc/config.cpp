@@ -30,6 +30,9 @@
 #include <seiscomp/datamodel/stationmagnitude.h>
 #include <seiscomp/logging/log.h>
 
+#include <algorithm>
+#include <iterator>
+
 
 using namespace std;
 
@@ -44,7 +47,9 @@ namespace QL2SC {
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 bool Config::init() {
 	Client::Application *app = SCCoreApp;
-	if ( app == NULL ) return false;
+	if ( !app ) {
+		return false;
+	}
 
 	SEISCOMP_INFO("reading configuration");
 
@@ -61,6 +66,27 @@ bool Config::init() {
 
 	try { maxWaitForEventIDTimeout = app->configGetInt("eventAssociationTimeout"); }
 	catch ( ... ) { maxWaitForEventIDTimeout = 10; }
+
+	try { allowRemoval = app->configGetBool("allowRemoval"); }
+	catch ( ... ) { allowRemoval = true; }
+
+	try {
+		auto publicIDWhitelist = app->configGetStrings("processing.whitelist.publicIDs");
+		copy(
+			publicIDWhitelist.begin(), publicIDWhitelist.end(),
+			inserter(publicIDFilter.allow, publicIDFilter.allow.end())
+		);
+	}
+	catch ( ... ) {}
+
+	try {
+		auto publicIDBlacklist = app->configGetStrings("processing.blacklist.publicIDs");
+		copy(
+			publicIDBlacklist.begin(), publicIDBlacklist.end(),
+			inserter(publicIDFilter.deny, publicIDFilter.deny.end())
+		);
+	}
+	catch ( ... ) {}
 
 	// host configurations
 	hosts.clear();
@@ -99,6 +125,9 @@ bool Config::init() {
 
 		try { cfg.syncPreferred = app->configGetBool(prefix + "syncPreferred"); }
 		catch ( ... ) { cfg.syncPreferred = false; }
+
+		try { cfg.syncEventDelay = app->configGetInt(prefix + "syncEventDelay"); }
+		catch ( ... ) { cfg.syncEventDelay = 0; }
 
 		// data options
 		bool isSet;
@@ -155,8 +184,8 @@ bool Config::init() {
 		catch ( ... ) {
 			cfg.routingTable[DataModel::Pick::TypeInfo().className()] = Client::Protocol::IMPORT_GROUP;
 			cfg.routingTable[DataModel::Amplitude::TypeInfo().className()] = Client::Protocol::IMPORT_GROUP;
-			cfg.routingTable[DataModel::Origin::TypeInfo().className()] = "LOCATION";
-			cfg.routingTable[DataModel::FocalMechanism::TypeInfo().className()] = "FOCMECH";
+			cfg.routingTable[DataModel::Origin::TypeInfo().className()] = "EVENT";
+			cfg.routingTable[DataModel::FocalMechanism::TypeInfo().className()] = "EVENT";
 		}
 
 		// create explicit routing entries for top-level EventParameters

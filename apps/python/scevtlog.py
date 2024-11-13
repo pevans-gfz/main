@@ -15,11 +15,14 @@
 
 import sys
 import os
-import time
 import traceback
 import re
-import seiscomp.core, seiscomp.client, seiscomp.datamodel, seiscomp.io
-import seiscomp.logging, seiscomp.system
+import seiscomp.core
+import seiscomp.client
+import seiscomp.datamodel
+import seiscomp.io
+import seiscomp.logging
+import seiscomp.system
 
 
 def time2str(time):
@@ -121,7 +124,8 @@ class EventHistory(seiscomp.client.Application):
         try:
             self.commandline().addGroup("Storage")
             self.commandline().addStringOption(
-                "Storage", "directory,o", "Specify the storage directory")
+                "Storage", "directory,o", "Specify the storage directory. "
+                "Default: @LOGDIR@/events.")
             self.commandline().addStringOption("Storage", "format,f",
                                                "Specify storage format (autoloc1, autoloc3, xml [default])")
         except:
@@ -144,13 +148,26 @@ class EventHistory(seiscomp.client.Application):
             pass
 
         try:
-            if self.configGetBool("gzip") == True:
+            if self.configGetBool("gzip"):
                 self._useGZIP = True
                 self._revisionFileExt = ".gz"
         except:
             pass
 
         return True
+
+    def printUsage(self):
+        print('''Usage:
+  scevtlog [options]
+
+Save event history into files''')
+
+        seiscomp.client.Application.printUsage(self)
+
+        print('''Examples:
+Execute on command line with debug output
+  scevtlog --debug
+''')
 
     def init(self):
         if not seiscomp.client.Application.init(self):
@@ -187,6 +204,10 @@ class EventHistory(seiscomp.client.Application):
 
         # self.updateObject(obj)
         # return True
+
+    def done(self):
+        seiscomp.client.Application.done(self)
+        self._cache.setDatabaseArchive(None)
 
     def printEvent(self, evt, newEvent):
         if self._format != "xml":
@@ -487,6 +508,17 @@ class EventHistory(seiscomp.client.Application):
 
                 if pick:
                     pick_cloned = seiscomp.datamodel.Pick.Cast(pick.clone())
+
+                    # Load comments
+                    if pick.commentCount() == 0:
+                        self.query().loadComments(pick)
+
+                    # Copy pick comments
+                    ncmts = pick.commentCount()
+                    for i in range(ncmts):
+                        cmt_cloned = seiscomp.datamodel.Comment.Cast(
+                            pick.comment(i).clone())
+                        pick_cloned.add(cmt_cloned)
                     ep.add(pick_cloned)
 
             # Copy network magnitudes

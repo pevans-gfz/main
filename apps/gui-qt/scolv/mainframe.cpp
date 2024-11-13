@@ -149,13 +149,8 @@ MainFrame::MainFrame(){
 
 	_actionConfigureAcquisition = new QAction(this);
 	_actionConfigureAcquisition->setObjectName(QString::fromUtf8("configureAcquisition"));
-#if QT_VERSION >= 0x050000
 	_actionConfigureAcquisition->setShortcut(QApplication::translate("MainWindow", "F3", 0));
 	_actionConfigureAcquisition->setText(QApplication::translate("MainWindow", "Configure &OriginLocatorView...", 0));
-#else
-	_actionConfigureAcquisition->setShortcut(QApplication::translate("MainWindow", "F3", 0, QApplication::UnicodeUTF8));
-	_actionConfigureAcquisition->setText(QApplication::translate("MainWindow", "Configure &OriginLocatorView...", 0, QApplication::UnicodeUTF8));
-#endif
 
 	addAction(_actionConfigureAcquisition);
 
@@ -173,7 +168,6 @@ MainFrame::MainFrame(){
 
 	_ui.menuSettings->addAction(_actionConfigureAcquisition);
 
-#if QT_VERSION >= 0x040300
 	// Setup system tray
 	bool addSystemTray = true;
 	try { addSystemTray = SCApp->configGetBool("olv.systemTray"); }
@@ -186,17 +180,18 @@ MainFrame::MainFrame(){
 		_trayIcon->show();
 	}
 	else
-		_trayIcon = NULL;
+		_trayIcon = nullptr;
 
-	connect(_trayIcon, SIGNAL(messageClicked()), this, SLOT(trayIconMessageClicked()));
-	connect(_trayIcon, SIGNAL(activated(QSystemTrayIcon::ActivationReason)),
-	        this, SLOT(trayIconActivated(QSystemTrayIcon::ActivationReason)));
-#endif
+	if ( _trayIcon ) {
+		connect(_trayIcon, SIGNAL(messageClicked()), this, SLOT(trayIconMessageClicked()));
+		connect(_trayIcon, SIGNAL(activated(QSystemTrayIcon::ActivationReason)),
+		        this, SLOT(trayIconActivated(QSystemTrayIcon::ActivationReason)));
+	}
 
 	Map::ImageTreePtr mapTree = new Map::ImageTree(SCApp->mapsDesc());
 
-	_eventSmallSummary = NULL;
-	_eventSmallSummaryCurrent = NULL;
+	_eventSmallSummary = nullptr;
+	_eventSmallSummaryCurrent = nullptr;
 
 	try { _expertMode = SCApp->configGetBool("mode.expert"); }
 	catch ( ... ) { _expertMode = true; }
@@ -562,6 +557,15 @@ MainFrame::MainFrame(){
 	try { amplitudeConfig.postOffset = Core::TimeSpan(SCApp->configGetInt("amplitudePicker.postOffset")); }
 	catch ( ... ) { amplitudeConfig.postOffset = Core::TimeSpan(300.0); }
 
+	try { amplitudeConfig.defaultNoiseBegin = SCApp->configGetDouble("amplitudePicker.defaultNoiseBegin"); }
+	catch ( ... ) {}
+	try { amplitudeConfig.defaultNoiseEnd = SCApp->configGetDouble("amplitudePicker.defaultNoiseEnd"); }
+	catch ( ... ) {}
+	try { amplitudeConfig.defaultSignalBegin = SCApp->configGetDouble("amplitudePicker.defaultSignalBegin"); }
+	catch ( ... ) {}
+	try { amplitudeConfig.defaultSignalEnd = SCApp->configGetDouble("amplitudePicker.defaultSignalEnd"); }
+	catch ( ... ) {}
+
 	try {
 		std::vector<std::string> filters = SCApp->configGetStrings("amplitudePicker.filters");
 
@@ -631,7 +635,7 @@ MainFrame::MainFrame(){
 	_picker = new PickerView();
 	_picker->setDatabase(_query.get());
 	_picker->setDataSource(rsService.c_str(), rsSource.c_str());
-	_picker->setStatusBar(NULL);
+	_picker->setStatusBar(nullptr);
 	*/
 
 	//_originLocator->setPickerView(_picker);
@@ -651,8 +655,8 @@ MainFrame::MainFrame(){
 		layoutEventEdit->addWidget(_eventEdit);
 	}
 	else {
-		_tabEventEdit = NULL;
-		_eventEdit = NULL;
+		_tabEventEdit = nullptr;
+		_eventEdit = nullptr;
 	}
 
 	/*
@@ -670,6 +674,7 @@ MainFrame::MainFrame(){
 
 	// Connect events layer with map
 	EventLayer *eventMapLayer = new EventLayer(_originLocator->map());
+	eventMapLayer->setCursorShape(Qt::PointingHandCursor);
 	connect(_eventList, SIGNAL(reset()), eventMapLayer, SLOT(clear()));
 	connect(_eventList, SIGNAL(eventAddedToList(Seiscomp::DataModel::Event*,bool)),
 	        eventMapLayer, SLOT(addEvent(Seiscomp::DataModel::Event*,bool)));
@@ -905,15 +910,24 @@ MainFrame::MainFrame(){
 	connect(_ui.actionShowStationAnnotations, SIGNAL(toggled(bool)), _originLocator, SLOT(drawStationAnnotations(bool)));
 	connect(_ui.actionShowStations, SIGNAL(toggled(bool)), _magnitudes, SLOT(drawStations(bool)));
 	connect(_ui.actionShowStationAnnotations, SIGNAL(toggled(bool)), _magnitudes, SLOT(drawStationAnnotations(bool)));
+	connect(_ui.actionShowStations, SIGNAL(toggled(bool)), _eventEdit, SLOT(drawStations(bool)));
+	connect(_ui.actionShowStationAnnotations, SIGNAL(toggled(bool)), _eventEdit, SLOT(drawStationAnnotations(bool)));
 	connect(_ui.actionShowEventList, SIGNAL(triggered(bool)), this, SLOT(showEventList()));
 
 	_originLocator->drawStations(_ui.actionShowStations->isChecked());
 	_originLocator->drawStationAnnotations(_ui.actionShowStationAnnotations->isChecked());
 	_magnitudes->drawStations(_ui.actionShowStations->isChecked());
 	_magnitudes->drawStationAnnotations(_ui.actionShowStationAnnotations->isChecked());
+	_eventEdit->drawStations(_ui.actionShowStations->isChecked());
+	_eventEdit->drawStationAnnotations(_ui.actionShowStationAnnotations->isChecked());
 
 #ifdef WITH_SMALL_SUMMARY
 	_ui.frameSummary->setVisible(_ui.actionShowSummary->isChecked());
+
+	_ui.mainSplitter->restoreGeometry(
+	            SCApp->settings().value("mainSplitter/geometry").toByteArray());
+	_ui.mainSplitter->restoreState(
+	            SCApp->settings().value("mainSplitter/windowState").toByteArray());
 #endif
 
 	try {
@@ -932,7 +946,14 @@ MainFrame::MainFrame(){
 
 MainFrame::~MainFrame() {
 	SCApp->settings().beginGroup(objectName());
+
+	SCApp->settings().setValue("mainSplitter/geometry",
+	                           _ui.mainSplitter->saveGeometry());
+	SCApp->settings().setValue("mainSplitter/windowState",
+	                           _ui.mainSplitter->saveState());
+
 	SCApp->settings().setValue("showSummary", _ui.actionShowSummary->isChecked());
+
 	SCApp->settings().endGroup();
 }
 
@@ -950,14 +971,12 @@ void MainFrame::loadEvents(float days) {
 	_eventList->setInterval(tw);
 	_eventList->readFromDatabase();
 	_eventList->selectFirstEnabledEvent();
-#if QT_VERSION >= 0x040300
 	if ( _trayIcon && _eventList->eventCount() > 0 ) {
 		_trayIcon->showMessage(tr("Finished"),
 		                       tr("%1 has loaded %2 events")
 		                       .arg(SCApp->name().c_str())
 		                       .arg(_eventList->eventCount()));
 	}
-#endif
 }
 
 
@@ -972,21 +991,16 @@ void MainFrame::setEventID(const std::string &eventID) {
 		return;
 	}
 
-	_eventList->add(e.get(), NULL);
+	_eventList->add(e.get(), nullptr);
 	_eventList->selectEventID(e->publicID());
 }
 
 
 void MainFrame::hoverEvent(const std::string &eventID) {
 	if ( !_eventID.empty() && (_eventID == eventID) )
-		_originLocator->map()->setToolTip(tr("%1\nCurrently loaded").arg(eventID.c_str()));
+		_originLocator->setToolTip(tr("%1\nCurrently loaded").arg(eventID.c_str()));
 	else
-		_originLocator->map()->setToolTip(eventID.c_str());
-
-	if ( eventID.empty() )
-		_originLocator->map()->unsetCursor();
-	else
-		_originLocator->map()->setCursor(Qt::PointingHandCursor);
+		_originLocator->setToolTip(eventID.c_str());
 }
 
 
@@ -1087,11 +1101,7 @@ void MainFrame::configureAcquisition() {
 		SCApp->configSetBool("picker.removeAutomaticPicksFromStationAfterManualReview", pc.removeAutomaticStationPicks);
 		SCApp->configSetBool("picker.removeAllAutomaticPicksAfterManualReview", pc.removeAutomaticPicks);
 
-		QStringList toks = pc.recordURL.split("://");
-		if ( toks.count() == 2 ) {
-			SCApp->configSetString("recordstream.service", toks[0].toStdString());
-			SCApp->configSetString("recordstream.source", toks[1].toStdString());
-		}
+		SCApp->configSetString("recordstream", pc.recordURL.toStdString());
 
 		std::vector<std::string> filters;
 		foreach ( const PickerView::Config::FilterEntry &entry, pc.filters ) {
@@ -1140,38 +1150,47 @@ void MainFrame::fileOpen() {
 	QString filename = QFileDialog::getOpenFileName(this,
 		tr("Open EventParameters"), "", tr("XML files (*.xml)"));
 
-	if ( filename.isEmpty() ) return;
+	openFile(filename.toStdString());
+}
+
+
+void MainFrame::openFile(const std::string &filename) {
+	if ( filename.empty() ) return;
 
 	IO::XMLArchive ar;
-	if ( !ar.open(filename.toStdString().c_str()) ) {
-		QMessageBox::critical(this, "Error", QString("Invalid file: %1").arg(filename));
+	if ( !ar.open(filename.c_str()) ) {
+		QMessageBox::critical(this, "Error", QString("Invalid file: %1").arg(filename.c_str()));
 		return;
 	}
 
 	DataModel::EventParametersPtr ep;
 
-	_offlineData = NULL;
+	_offlineData = nullptr;
+	_offlineJournal = nullptr;
 
-	//_currentOrigin = NULL;
+	//_currentOrigin = nullptr;
 	_originLocator->clear();
-	_magnitudes->setOrigin(NULL, NULL);
-	_eventEdit->setEvent(NULL, NULL);
-	_eventSmallSummary->setEvent(NULL);
-	_eventSmallSummaryCurrent->setEvent(NULL);
+	_magnitudes->setOrigin(nullptr, nullptr);
+	_eventEdit->setEvent(nullptr, nullptr);
+	_eventSmallSummary->setEvent(nullptr);
+	_eventSmallSummaryCurrent->setEvent(nullptr);
 	_eventList->clear();
 
-	_currentOrigin = NULL;
+	_currentOrigin = nullptr;
 
 	ar >> ep;
-	if ( ep == NULL ) {
-		QMessageBox::critical(this, "Error", QString("Unable to find EventParameters structures in %1.").arg(filename));
+	if ( !ep ) {
+		QMessageBox::critical(this, "Error", QString("Unable to find EventParameters structures in %1.").arg(filename.c_str()));
 		return;
 	}
 
+	ar >> _offlineJournal;
+
 	_offlineData = ep;
+
 	if ( !_offlineData->registered() ) {
 		if ( !_offlineData->setPublicID(_offlineData->publicID()) ) {
-			_offlineData = NULL;
+			_offlineData = nullptr;
 			QMessageBox::critical(this, "Error", QString("Unable to register EventParameters globally."));
 			return;
 		}
@@ -1180,7 +1199,7 @@ void MainFrame::fileOpen() {
 	std::set<std::string> associatedOriginIDs;
 	for ( size_t i = 0; i < ep->eventCount(); ++i ) {
 		DataModel::Event *ev = ep->event(i);
-		_eventList->add(ev, NULL);
+		_eventList->add(ev, nullptr);
 
 		for ( size_t j = 0; j < ev->originReferenceCount(); ++j ) {
 			DataModel::OriginReference *ref = ev->originReference(j);
@@ -1191,7 +1210,7 @@ void MainFrame::fileOpen() {
 	for ( size_t i = 0; i < ep->originCount(); ++i ) {
 		DataModel::Origin *org = ep->origin(i);
 		if ( associatedOriginIDs.find(org->publicID()) == associatedOriginIDs.end() )
-			_eventList->add(NULL, org);
+			_eventList->add(nullptr, org);
 	}
 
 	_eventList->selectEvent(0);
@@ -1199,7 +1218,7 @@ void MainFrame::fileOpen() {
 
 
 void MainFrame::fileSave() {
-	if ( _offlineData == NULL ) {
+	if ( !_offlineData ) {
 		QMessageBox::information(this, "Error", "No data available.");
 		return;
 	}
@@ -1242,7 +1261,7 @@ void MainFrame::setOrigin(Seiscomp::DataModel::Origin *o,
 
 	/*
 	if ( _expertMode ) {
-		_eventEdit->setEvent(NULL, NULL);
+		_eventEdit->setEvent(nullptr, nullptr);
 	}
 	*/
 }
@@ -1264,7 +1283,7 @@ void MainFrame::committedNewOrigin(Seiscomp::DataModel::Origin *, Seiscomp::Data
 
 
 void MainFrame::setArtificialOrigin(Seiscomp::DataModel::Origin *org) {
-	populateOrigin(org, NULL, true);
+	populateOrigin(org, nullptr, true);
 }
 
 
@@ -1338,15 +1357,15 @@ void MainFrame::closeEvent(QCloseEvent *e) {
 
 void MainFrame::originReferenceRemoved(const std::string &eventID, Seiscomp::DataModel::OriginReference *ref) {
 	if ( _currentOrigin && _currentOrigin->publicID() == ref->originID() ) {
-		if ( _originLocator->setOrigin(_currentOrigin.get(), NULL) ) {
+		if ( _originLocator->setOrigin(_currentOrigin.get(), nullptr) ) {
 			_magnitudes->setPreferredMagnitudeID("");
 
 #ifdef WITH_SMALL_SUMMARY
-			_eventSmallSummary->setEvent(NULL);
-			_eventSmallSummaryCurrent->setEvent(NULL, _currentOrigin.get(), true);
+			_eventSmallSummary->setEvent(nullptr);
+			_eventSmallSummaryCurrent->setEvent(nullptr, _currentOrigin.get(), true);
 #endif
 			if ( _expertMode )
-				_eventEdit->setEvent(NULL, _currentOrigin.get());
+				_eventEdit->setEvent(nullptr, _currentOrigin.get());
 
 			_eventID.clear();
 		}
@@ -1466,10 +1485,10 @@ SEISCOMP_DEBUG("EventParametersPtr _createEventParametersForPublication(%s)",eve
 	// preferred origin
 	string originID = event->preferredOriginID();
 	Origin *origin = Origin::Find(originID);
-	if (origin == NULL) {
+	if ( !origin ) {
 		// not having a preferred origin is a fatal error
 		SEISCOMP_ERROR("_createEventParametersForPublication(%s): preferredOrigin not found",event->publicID().c_str());
-		return NULL;
+		return nullptr;
 	}
 
 	// Even though we normally have the arrivals loaded, this might not be
@@ -1489,13 +1508,13 @@ SEISCOMP_DEBUG("EventParametersPtr _createEventParametersForPublication(%s)",eve
 	// focal mechanism
 	string focalMechanismID = event->preferredFocalMechanismID();
 	FocalMechanism *focalMechanism = FocalMechanism::Find(focalMechanismID);
-	// not necessarily an error if NULL
+	// not necessarily an error if nullptr
 	if (focalMechanism) {
 		SEISCOMP_DEBUG("Focal mechanism <%s> found", focalMechanism->publicID().c_str());
 		FocalMechanismPtr preferredFocalMechanism = FocalMechanism::Cast(copy(focalMechanism));
 		ep->add(preferredFocalMechanism.get());
 
-		OriginPtr triggeringOrigin = NULL;
+		OriginPtr triggeringOrigin = nullptr;
 		if (preferredFocalMechanism->triggeringOriginID().size()) {
 			if (event->preferredOriginID() == preferredFocalMechanism->triggeringOriginID())
 				triggeringOrigin = preferredOrigin;
@@ -1515,7 +1534,7 @@ SEISCOMP_DEBUG("EventParametersPtr _createEventParametersForPublication(%s)",eve
 					}
 				}
 			}
-			// note that triggeringOrigin may still be NULL
+			// note that triggeringOrigin may still be nullptr
 			if (triggeringOrigin) {
 				clonedEvent->add(new OriginReference(triggeringOrigin->publicID()));
 				ep->add(triggeringOrigin.get());
@@ -1539,7 +1558,7 @@ SEISCOMP_DEBUG("EventParametersPtr _createEventParametersForPublication(%s)",eve
 						ep->add(derivedOrigin.get());
 					}
 				}
-				
+
 			}
 
 		}
@@ -1552,7 +1571,7 @@ SEISCOMP_DEBUG("EventParametersPtr _createEventParametersForPublication(%s)",eve
 void MainFrame::publishEvent() {
 #if defined(WITH_SMALL_SUMMARY)
 
-	const Event *event = NULL;
+	const Event *event = nullptr;
 	if ( _eventSmallSummary ) event = _eventSmallSummary->currentEvent();
 
 	if ( !event ) {
@@ -1573,13 +1592,13 @@ void MainFrame::publishEvent() {
 
 	epShort->add( orig );
 
-	Origin *magOrigin = NULL;
-	EventParameters *oldMagParent = NULL;
+	Origin *magOrigin = nullptr;
+	EventParameters *oldMagParent = nullptr;
 
 	Magnitude *mag = Magnitude::Find(event->preferredMagnitudeID());
-	if ( mag != NULL ) {
+	if ( mag != nullptr ) {
 		// Magnitude is cross-referenced, lets add its origin as well
-		if ( mag->origin() != orig && mag->origin() != NULL ) {
+		if ( mag->origin() != orig && mag->origin() != nullptr ) {
 			magOrigin = mag->origin();
 			oldMagParent = magOrigin->eventParameters();
 			magOrigin->detach();
@@ -1597,12 +1616,12 @@ void MainFrame::publishEvent() {
 		SEISCOMP_ERROR(" Can't open tmpFile (%s)!", tmpFileName.c_str());
 		PublicObject::SetRegistrationEnabled(wasEnabled);
 
-		if ( oldParent != NULL ) {
+		if ( oldParent != nullptr ) {
 			orig->detach();
 			oldParent->add(orig);
 		}
 
-		if ( oldMagParent != NULL ) {
+		if ( oldMagParent != nullptr ) {
 			magOrigin->detach();
 			oldMagParent->add(magOrigin);
 		}
@@ -1626,12 +1645,12 @@ void MainFrame::publishEvent() {
 	ar.close();
 	SEISCOMP_DEBUG("--> created tempFile:%s", tmpFileName.c_str());
 /*
-	if ( oldParent != NULL ) {
+	if ( oldParent != nullptr ) {
 		orig->detach();
 		oldParent->add(orig);
 	}
 
-	if ( oldMagParent != NULL ) {
+	if ( oldMagParent != nullptr ) {
 		magOrigin->detach();
 		oldMagParent->add(magOrigin);
 	}
@@ -1726,7 +1745,7 @@ void MainFrame::tabChanged(int tab) {
 	QWidget *lastTabWidget = _currentTabWidget;
 	_currentTabWidget = _ui.tabWidget->widget(tab);
 
-	MapWidget *source = NULL, *target = NULL;
+	MapWidget *source = nullptr, *target = nullptr;
 	if ( lastTabWidget == _ui.tabLocation )
 		source = _originLocator->map();
 	else if ( lastTabWidget == _ui.tabMagnitudes )
@@ -1754,7 +1773,7 @@ void MainFrame::messageAvailable(Seiscomp::Core::Message *msg, Seiscomp::Client:
 				}
 				else */if ( ep->originCount() > 0 ) {
 					Origin *origin = ep->origin(0);
-					if ( populateOrigin(origin, NULL, true) ) {
+					if ( populateOrigin(origin, nullptr, true) ) {
 						for ( size_t i = 0; i < ep->pickCount(); ++i )
 							_originLocator->addLocalPick(ep->pick(i));
 					}
@@ -1766,7 +1785,6 @@ void MainFrame::messageAvailable(Seiscomp::Core::Message *msg, Seiscomp::Client:
 
 
 void MainFrame::eventAdded(Seiscomp::DataModel::Event *e, bool fromNotification) {
-#if QT_VERSION >= 0x040300
 	if ( fromNotification ) {
 		_trayMessageEventID = e->publicID();
 
@@ -1781,9 +1799,10 @@ void MainFrame::eventAdded(Seiscomp::DataModel::Event *e, bool fromNotification)
 			}
 		}
 
-		_trayIcon->showMessage(tr("New event"), msg);
+		if ( _trayIcon ) {
+			_trayIcon->showMessage(tr("New event"), msg);
+		}
 	}
-#endif
 }
 
 
@@ -1797,15 +1816,12 @@ void MainFrame::updateEventTabText() {
 }
 
 
-#if QT_VERSION >= 0x040300
-
 
 void MainFrame::trayIconActivated(QSystemTrayIcon::ActivationReason reason) {
 	if ( reason == QSystemTrayIcon::Trigger ||
 	     reason == QSystemTrayIcon::DoubleClick )
 		setVisible(!isVisible());
 }
-#endif
 
 
 void MainFrame::trayIconMessageClicked() {

@@ -13,9 +13,55 @@
 # https://www.gnu.org/licenses/agpl-3.0.html.                              #
 ############################################################################
 
-import traceback
+import os
 import sys
-import seiscomp.core, seiscomp.client, seiscomp.datamodel
+
+import seiscomp.core
+import seiscomp.client
+import seiscomp.datamodel
+
+
+def readXML(self):
+    ar = seiscomp.io.XMLArchive()
+    if not ar.open(self._inputFile):
+        print(f"Unable to open input file {self._inputFile}")
+        return []
+
+    obj = ar.readObject()
+    if obj is None:
+        raise TypeError("invalid input file format")
+
+    ep = seiscomp.datamodel.EventParameters.Cast(obj)
+    if ep is None:
+        raise ValueError("no event parameters found in input file")
+
+    originIDs = []
+    for i in range(ep.originCount()):
+        org = ep.origin(i)
+
+        # check time requirements
+        orgTime = org.time().value()
+        if orgTime < self._startTime:
+            continue
+        if orgTime > self._endTime:
+            continue
+
+        # check author requirements
+        if self.author:
+            try:
+                author = org.creationInfo().author()
+            except Exception:
+                continue
+
+            if author != self.author:
+                continue
+
+        try:
+            originIDs.append(org.publicID())
+        except Exception:
+            continue
+
+    return originIDs
 
 
 class OriginList(seiscomp.client.Application):
@@ -26,17 +72,54 @@ class OriginList(seiscomp.client.Application):
         self.setDatabaseEnabled(True, False)
         self.setDaemonEnabled(False)
 
-        self._startTime = None
-        self._endTime = None
+        self._startTime = seiscomp.core.Time()
+        self._endTime = seiscomp.core.Time.GMT()
+        self._delimiter = None
+        self._inputFile = None
 
     def createCommandLineDescription(self):
+        self.commandline().addGroup("Input")
+        self.commandline().addStringOption(
+            "Input",
+            "input,i",
+            "Name of input XML file. Read from stdin if '-' is given. Deactivates "
+            "reading events from database",
+        )
         self.commandline().addGroup("Origins")
-        self.commandline().addStringOption("Origins", "begin",
-                                           "specify the lower bound of the time interval. Time format: '1970-01-01 00:00:00'")
-        self.commandline().addStringOption("Origins", "end",
-                                           "specify the upper bound of the time interval. Time format: '1970-01-01 00:00:00'")
-        self.commandline().addStringOption("Origins", "author",
-                                           "specify the author")
+        self.commandline().addStringOption(
+            "Origins",
+            "begin",
+            "The lower bound of the time interval. Format: '1970-01-01 00:00:00'.",
+        )
+        self.commandline().addStringOption(
+            "Origins",
+            "end",
+            "The upper bound of the time interval. Format: '1970-01-01 00:00:00'.",
+        )
+        self.commandline().addStringOption(
+            "Origins", "author", "The author of the origins."
+        )
+
+        self.commandline().addGroup("Output")
+        self.commandline().addStringOption(
+            "Output",
+            "delimiter,D",
+            "The delimiter of the resulting origin IDs. Default: '\\n')",
+        )
+        return True
+
+    def validateParameters(self):
+        if not seiscomp.client.Application.validateParameters(self):
+            return False
+
+        try:
+            self._inputFile = self.commandline().optionString("input")
+        except RuntimeError:
+            pass
+
+        if self._inputFile:
+            self.setDatabaseEnabled(False, False)
+
         return True
 
     def init(self):
@@ -45,58 +128,104 @@ class OriginList(seiscomp.client.Application):
 
         try:
             start = self.commandline().optionString("begin")
-            self._startTime = seiscomp.core.Time()
-            if self._startTime.fromString(start, "%F %T") == False:
-                sys.stderr.write(
-                    "Wrong 'begin' format '%s' -> setting to None\n" % start)
-        except:
-            sys.stderr.write("Wrong 'begin' format -> setting to None\n")
-            self._startTime = seiscomp.core.Time()
+        except RuntimeError:
+            start = "1900-01-01T00:00:00Z"
 
-#   sys.stderr.write("Setting start to %s\n" % self._startTime.toString("%F %T"))
+        self._startTime = seiscomp.core.Time.FromString(start)
+        if self._startTime is None:
+            seiscomp.logging.error(f"Wrong 'begin' format '{start}'")
+            return False
 
         try:
             end = self.commandline().optionString("end")
-            self._endTime = seiscomp.core.Time.FromString(end, "%F %T")
-        except:
-            self._endTime = seiscomp.core.Time.GMT()
+        except RuntimeError:
+            end = "2500-01-01T00:00:00Z"
+
+        self._endTime = seiscomp.core.Time.FromString(end)
+        if self._endTime is None:
+            seiscomp.logging.error(f"Wrong 'end' format '{end}'")
+            return False
+
+        if self._endTime <= self._startTime:
+            seiscomp.logging.error(
+                f"Invalid search interval: {self._startTime} - {self._endTime}"
+            )
+            return False
 
         try:
             self.author = self.commandline().optionString("author")
-            sys.stderr.write("%s author used for output\n" % (self.author))
-        except:
+            seiscomp.logging.debug(f"Filtering origins by author {self.author}")
+        except RuntimeError:
             self.author = False
 
-#   sys.stderr.write("Setting end to %s\n" % self._endTime.toString("%F %T"))
+        try:
+            self._delimiter = self.commandline().optionString("delimiter")
+        except RuntimeError:
+            self._delimiter = "\n"
 
         return True
+
+    def printUsage(self):
+        print(
+            f"""Usage:
+  {os.path.basename(__file__)} [options]
+
+List origin IDs available in a given time range and print to stdout."""
+        )
+
+        seiscomp.client.Application.printUsage(self)
+
+        print(
+            f"""Examples:
+Print all origin IDs from year 2022 and thereafter
+  {os.path.basename(__file__)} -d mysql://sysop:sysop@localhost/seiscomp \
+--begin "2022-01-01 00:00:00"
+
+Print IDs of all events in XML file
+  {os.path.basename(__file__)} -i origins.xml
+"""
+        )
 
     def run(self):
-        q = "select PublicObject.%s, Origin.* from Origin, PublicObject where Origin._oid=PublicObject._oid and Origin.%s >= '%s' and Origin.%s < '%s'" %\
-            (self.database().convertColumnName("publicID"),
-             self.database().convertColumnName("time_value"),
-             self.database().timeToString(self._startTime),
-             self.database().convertColumnName("time_value"),
-             self.database().timeToString(self._endTime))
-        
+        if self._inputFile:
+            out = readXML(self)
+            print(f"{self._delimiter.join(out)}\n", file=sys.stdout)
+            return True
+
+        seiscomp.logging.debug(f"Search interval: {self._startTime} - {self._endTime}")
+        out = []
+        q = (
+            "select PublicObject.%s, Origin.* from Origin, PublicObject where Origin._oid=PublicObject._oid and Origin.%s >= '%s' and Origin.%s < '%s'"
+            % (
+                self.database().convertColumnName("publicID"),
+                self.database().convertColumnName("time_value"),
+                self.database().timeToString(self._startTime),
+                self.database().convertColumnName("time_value"),
+                self.database().timeToString(self._endTime),
+            )
+        )
+
         if self.author:
-            q += " and Origin.%s = '%s' " %\
-                 (self.database().convertColumnName("creationInfo_author"),
-                  self.query().toString(self.author))
-        
-        for obj in self.query().getObjectIterator(q, seiscomp.datamodel.Origin.TypeInfo()):
+            q += " and Origin.%s = '%s' " % (
+                self.database().convertColumnName("creationInfo_author"),
+                self.query().toString(self.author),
+            )
+
+        for obj in self.query().getObjectIterator(
+            q, seiscomp.datamodel.Origin.TypeInfo()
+        ):
             org = seiscomp.datamodel.Origin.Cast(obj)
             if org:
-                sys.stdout.write("%s\n" % org.publicID())
+                out.append(org.publicID())
 
+        print(f"{self._delimiter.join(out)}\n", file=sys.stdout)
         return True
 
 
-try:
+def main():
     app = OriginList(len(sys.argv), sys.argv)
-    rc = app()
-except:
-    sys.stderr.write("%s\n" % traceback.format_exc())
-    sys.exit(1)
+    app()
 
-sys.exit(rc)
+
+if __name__ == "__main__":
+    main()

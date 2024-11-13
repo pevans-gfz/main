@@ -27,10 +27,9 @@
 #include <cstring>
 #include <algorithm>
 #include <functional>
+#include <thread>
 
 
-#include <boost/thread.hpp>
-#include <boost/bind.hpp>
 #include <boost/lexical_cast.hpp>
 
 #include <seiscomp/core/plugin.h>
@@ -52,15 +51,16 @@ ADD_SC_PLUGIN(
 
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-class SortClients : public std::binary_function<ClientInfoData, ClientInfoData, bool> {
+class SortClients {
 	public:
 		SortClients(Client::Status::Tag key) : _key(key) {}
 
-		result_type operator() (const first_argument_type& map0, const second_argument_type& map1) const {
+		bool operator() (const ClientInfoData &map0, const ClientInfoData &map1) const {
 			bool result = false;
 			try {
-				first_argument_type::const_iterator it0  = map0.find(_key);
-				second_argument_type::const_iterator it1 = map1.find(_key);
+				auto it0  = map0.find(_key);
+				auto it1 = map1.find(_key);
+
 				if ( it0 == map0.end() && it1 == map1.end() ) return true;
 				if ( it0 != map0.end() && it1 == map1.end() ) return false;
 				if ( it0 == map0.end() && it1 != map1.end() ) return true;
@@ -135,7 +135,7 @@ MNcursesPlugin::MNcursesPlugin()
 bool MNcursesPlugin::print(const ClientTable& table) {
 	{
 		// A copy is needed for refreshing the screen
-		boost::mutex::scoped_lock lock(_dataStructureMutex);
+		std::lock_guard<std::mutex> l(_dataStructureMutex);
 		_clientTableCache = table;
 	}
 	return printTable(_clientTableCache);
@@ -178,9 +178,8 @@ bool MNcursesPlugin::printTable(ClientTable& table) {
 	print(str);
 	print(formatLine(_header), HIGHLIGHT);
 
-	boost::mutex::scoped_lock lock(_dataStructureMutex);
-	// std::stable_sort(_clientTableCache.begin(), _clientTableCache.end(), std::not2(SortClients(_activeTag)));
-	_clientTableCache.sort(std::not2(SortClients(_activeTag)));
+	std::lock_guard<std::mutex> l(_dataStructureMutex);
+	_clientTableCache.sort(std::not_fn(SortClients(_activeTag)));
 
 	// Print clients
 	if ( _reverseSortOrder ) {
@@ -211,6 +210,8 @@ bool MNcursesPlugin::initOut(const Config::Config&) {
 	move(_currentLine, 0);
 	curs_set(0); // Hide the cursor
 	clearOut();
+
+	_inputThread = new std::thread(std::bind(&MNcursesPlugin::readUserInput, this));
 
 	return true;
 }
@@ -263,9 +264,6 @@ bool MNcursesPlugin::init() {
 	initDataStructures(Client::Status::MessageQueueSize, "q");
 	initDataStructures(Client::Status::Uptime, "uptime");
 	initDataStructures(Client::Status::ResponseTime, "resp");
-
-	boost::thread thread1(boost::bind(&MNcursesPlugin::readUserInput, this));
-	thread1.yield();
 
 	return true;
 }

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <seiscomp>
 	<module name="scesv" category="GUI">
-		<description>Event summary view</description>
+		<description>Event summary view.</description>
 		<configuration>
 			<parameter name="loadEventDB" type="double" unit="days" default="1">
 				<description>
@@ -10,29 +10,29 @@
 			</parameter>
 			<parameter name="showLastAutomaticSolution" type="boolean" default="false">
 				<description>
-					If enabled, the last automatic solution is displayed next to the
-					current solution in the summary panel. If the last automatic
-					solution differs from the current solution it is displayed
-					in red. If both solutions match it is displayed in gray.
+				If enabled, the last automatic solution is displayed next to the
+				current solution in the summary panel. If the last automatic
+				solution differs from the current solution it is displayed
+				in red. If both solutions match it is displayed in gray.
 				</description>
 			</parameter>
 			<parameter name="showOnlyMostRecentEvent" type="boolean" default="true">
 				<description>
-					If enabled only the most recent event is shown even if an update of
-					an older event is being received.
+				If enabled, only the most recent event is shown even if an update of
+				an older event is being received.
 				</description>
 			</parameter>
 			<parameter name="recenterMap" type="boolean" default="true">
 				<description>
-					If enabled, the map is centered around the most recent event event.
+				If enabled, the map is centered around the most recent event event.
 				</description>
 			</parameter>
 			<parameter name="enableFixAutomaticSolutions" type="boolean" default="false">
 				<description>
-					If enabled, an additional button is displayed which allows to switch back
-					the latest automatic solution. This button triggers an command for
-					scevent to prioritize automatic solutions until the next manual
-					solution is available.
+				If enabled, an additional button is displayed which allows to
+				switch back the latest automatic solution. This button triggers
+				an command for scevent to prioritize automatic solutions until
+				the next manual solution is available.
 				</description>
 			</parameter>
 			<parameter name="visibleMagnitudes" type="list:string" default="M,MLv,mb,mB,Mw(mB)">
@@ -59,16 +59,19 @@
 				<group name="script0">
 					<parameter name="exportMap" type="boolean" default="false">
 						<description>
-							If enabled, the current map is exported to file. The filename is appened to the parameter list of script0. The script has to take ownership of the file.
+						If enabled, the current map is exported to file. 
+						The filename is appened to the parameter list of script0.
+						The script has to take ownership of the file.
 						</description>
 					</parameter>
 					<parameter name="oldStyle" type="boolean" default="true">
 						<description>
-							If enabled, the parameter list of script0 is eventID, arrivalCount,
-							magnitude, description.
+						If enabled, the parameter list of script0 is event ID, 
+						arrival count, magnitude, description.
 
-							If disabled, the parameter list of script0 is eventID, preferredOriginID,
-							preferredMagnitudeID, preferredFocalMechanismID.
+						If disabled, the parameter list of script0 is event ID, 
+						preferredOriginID, preferredMagnitudeID, 
+						preferredFocalMechanismID.
 						</description>
 					</parameter>
 				</group>
@@ -80,16 +83,19 @@
 				<group name="script1">
 					<parameter name="exportMap" type="boolean" default="false">
 						<description>
-							If enabled, the current map is exported to file. The filename is appened to the parameter list of script1. The script has to take ownership of the file.
+						If enabled, the current map is exported to file. 
+						The filename is appened to the parameter list of script1.
+						The script has to take ownership of the file.
 						</description>
 					</parameter>
 					<parameter name="oldStyle" type="boolean" default="true">
 						<description>
-						If enabled, the parameter list of script1 is eventID, arrivalCount,
-						magnitude, description.
+						If enabled, the parameter list of script1 is event ID, 
+						arrivalCount, magnitude, description.
 
-						If disabled, the parameter list of script1 is eventID, preferredOriginID,
-						preferredMagnitudeID, preferredFocalMechanismID.
+						If disabled, the parameter list of script1 is event ID, 
+						preferredOriginID, preferredMagnitudeID, 
+						preferredFocalMechanismID.
 						</description>
 					</parameter>
 				</group>
@@ -103,84 +109,197 @@
 			</group>
 			<parameter name="ignoreOtherEvents" type="boolean" default="true">
 				<description>
-					If the event type is either &quot;other&quot; or &quot;not existing&quot;
-					and this flag is true then the event will not be shown.
+					If the event type is either &quot;other&quot; or 
+					&quot;not existing&quot; and this flag is true then the 
+					event will not be shown.
 				</description>
 			</parameter>
 			<group name="display">
-				<parameter name="lonmin" type="double">
+				<description>
+				Adjust content or display custom information in the Summary tab.
+				</description>
+				<parameter name="lonmin" type="double" unit="deg" default="-180">
 					<description>
-						Minimum longitude of initial displayed map region.
+						Minimum longitude of initially displayed map region.
 					</description>
 				</parameter>
-				<parameter name="lonmax" type="double">
+				<parameter name="lonmax" type="double" unit="deg" default="180">
 					<description>
-						Maximum longitude of initial displayed map region.
+						Maximum longitude of initially displayed map region.
 					</description>
 				</parameter>
-				<parameter name="latmin" type="double">
+				<parameter name="latmin" type="double" unit="deg" default="-90">
 					<description>
-						Minimum latitude of initial displayed map region.
+						Minimum latitude of initially displayed map region.
 					</description>
 				</parameter>
-				<parameter name="latmax" type="double">
+				<parameter name="latmax" type="double" unit="deg" default="90">
 					<description>
-						Maximum latitude of initial displayed map region.
+						Maximum latitude of initially displayed map region.
 					</description>
 				</parameter>
 				<group name="event">
+					<description>
+						Event information
+					</description>
 					<group name="comment">
 						<parameter name="id" type="string">
 							<description>
+							ID of the event comment to be considered.
 							</description>
 						</parameter>
 						<parameter name="default" type="string">
 							<description>
+							Value to be shown in case no valid event comment is
+							found.
 							</description>
 						</parameter>
 						<parameter name="label" type="string">
 							<description>
+							Label of the value to be shown.
 							</description>
 						</parameter>
 					</group>
 				</group>
 				<group name="origin">
+					<description>
+						Origin information
+					</description>
 					<group name="comment">
+						<description>
+						Display origin comments.
+						</description>
 						<parameter name="id" type="string">
 							<description>
+							ID of the origin comment to be considered.
 							</description>
 						</parameter>
 						<parameter name="default" type="string">
 							<description>
+							Value to be shown in case no valid origin comment is
+							found.
 							</description>
 						</parameter>
 						<parameter name="label" type="string">
 							<description>
+							Label of the value to be shown.
 							</description>
 						</parameter>
 					</group>
 				</group>
 			</group>
 			<group name="poi">
+				<description>
+					Display information related to a point of interest (POI)
+					read from the cities XML file.
+				</description>
 				<parameter name="maxDist" type="double" unit="deg" default="20">
 					<description>
-						Maximum distance in degrees of a POI (point of interest read
-						from cities.xml) to be taken into account.
+					Maximum distance in degrees of a POI to be taken into account.
 					</description>
 				</parameter>
 				<parameter name="minPopulation" type="double">
 					<description>
-						The minimum population of a POI to be taken into account.
+					The minimum population of a POI to be taken into account.
 					</description>
 				</parameter>
 				<parameter name="message" type="string">
 					<description>
-						Message conversion string that converts a POI into the text
-						displayed under the region label. There are different placeholders
-						that can be used: @dist@, @dir@, @poi@ and @region@.
+					Message conversion string that converts a POI into the text
+					displayed under the region label. There are different
+					placeholders that can be used: @dist@, @dir@, @poi@ and @region@.
 					</description>
 				</parameter>
 			</group>
 		</configuration>
+		<command-line>
+			<synopsis>
+				scesv [options]
+			</synopsis>
+			<group name="Generic">
+				<optionReference>generic#help</optionReference>
+				<optionReference>generic#version</optionReference>
+				<optionReference>generic#config-file</optionReference>
+				<optionReference>generic#plugins</optionReference>
+				<optionReference>generic#auto-shutdown</optionReference>
+				<optionReference>generic#shutdown-master-module</optionReference>
+				<optionReference>generic#shutdown-master-username</optionReference>
+				<optionReference>generic#print-config-vars</optionReference>
+				<optionReference>generic#validate-schema-params</optionReference>
+				<optionReference>generic#dump-settings</optionReference>
+			</group>
+
+			<group name="Verbosity">
+				<optionReference>verbosity#verbosity</optionReference>
+				<optionReference>verbosity#v</optionReference>
+				<optionReference>verbosity#quiet</optionReference>
+				<optionReference>verbosity#component</optionReference>
+				<optionReference>verbosity#syslog</optionReference>
+				<optionReference>verbosity#lockfile</optionReference>
+				<optionReference>verbosity#console</optionReference>
+				<optionReference>verbosity#debug</optionReference>
+				<optionReference>verbosity#log-file</optionReference>
+				<optionReference>verbosity#print-context</optionReference>
+				<optionReference>verbosity#print-component</optionReference>
+				<optionReference>verbosity#log-utc</optionReference>
+				<optionReference>verbosity#trace</optionReference>
+			</group>
+
+			<group name="Messaging">
+				<optionReference>messaging#user</optionReference>
+				<optionReference>messaging#host</optionReference>
+				<optionReference>messaging#timeout</optionReference>
+				<optionReference>messaging#primary-group</optionReference>
+				<optionReference>messaging#subscribe-group</optionReference>
+				<optionReference>messaging#content-type</optionReference>
+				<optionReference>messaging#start-stop-msg</optionReference>
+			</group>
+
+			<group name="Database">
+				<optionReference>database#db-driver-list</optionReference>
+				<optionReference>database#database</optionReference>
+				<optionReference>database#config-module</optionReference>
+				<optionReference>database#inventory-db</optionReference>
+				<optionReference>database#db-disable</optionReference>
+			</group>
+
+			<group name="Records">
+				<optionReference>records#record-driver-list</optionReference>
+				<optionReference>records#record-url</optionReference>
+				<optionReference>records#record-file</optionReference>
+				<optionReference>records#record-type</optionReference>
+			</group>
+
+			<group name="Cities">
+				<optionReference>cities#city-xml</optionReference>
+			</group>
+
+			<group name="User interface">
+				<optionReference>gui#full-screen</optionReference>
+				<optionReference>gui#non-interactive</optionReference>
+			</group>
+
+			<group name="Options">
+				<option flag="" long-flag="script0" argument="arg">
+					<description>
+					Path to the script called when configurable 
+					button0 is pressed; EventID, arrival count, magnitude and 
+					the additional location information string are passed as 
+					parameters $1, $2, $3 and $4, respectively.
+					</description>
+				</option>
+				<option flag="" long-flag="script1" argument="arg">
+					<description>
+					Path to the script called when configurable 
+					button1 is pressed; EventID, arrival count, magnitude and 
+					the additional location information string are passed as 
+					parameters $1, $2, $3 and $4, respectively.
+					</description>
+				</option>
+				<option flag="" long-flag="load-event-db" argument="arg">
+					<description>Number of days to load from database.</description>
+				</option>
+			</group>
+		</command-line>
 	</module>
 </seiscomp>

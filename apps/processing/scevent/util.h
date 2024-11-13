@@ -53,9 +53,7 @@ std::string generateEventID(int year, uint64_t x,
 
 std::string allocateEventID(DataModel::DatabaseArchive *,
                             const DataModel::Origin *origin,
-                            const std::string &prefix,
-                            const std::string &pattern,
-                            const Client::Config::StringSet *blackList = NULL);
+                            const Seiscomp::Client::Config &config);
 
 std::string region(const DataModel::Origin *origin);
 
@@ -75,6 +73,7 @@ template <typename T>
 Core::Time created(T *obj);
 
 DataModel::EventDescription *eventRegionDescription(DataModel::Event *ev);
+DataModel::EventDescription *eventFERegionDescription(DataModel::Event *ev);
 
 int magnitudePriority(const std::string &magType, const Client::Config &config);
 int agencyPriority(const std::string &agencyID, const Client::Config &config);

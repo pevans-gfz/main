@@ -151,8 +151,19 @@ void readConfig(ILOC_CONF &cfg, const Config::Config &config, const string &pref
 	GET_CFG_STRUCT(MinIterations);
 	GET_CFG_STRUCT(MaxIterations);
 	GET_CFG_STRUCT(MinNdefPhases);
-	GET_CFG_STRUCT(DoNotRenamePhases);
 
+	bool DoNotRenamePhases = cfg.DoNotRenamePhases;
+	GET_CFG(DoNotRenamePhases);
+	cfg.DoNotRenamePhases = DoNotRenamePhases ? 1 : 0;
+
+	// global model
+	string globalModel;
+	GET_CFG(globalModel);
+	if ( !globalModel.empty() ) {
+		strncpy(cfg.TTmodel, globalModel.c_str(), sizeof(cfg.TTmodel)-1);
+	}
+
+	// RSTT
 	bool UseRSTTPnSn = cfg.UseRSTTPnSn;
 	GET_CFG(UseRSTTPnSn);
 	cfg.UseRSTTPnSn = UseRSTTPnSn ? 1 : 0;
@@ -165,15 +176,17 @@ void readConfig(ILOC_CONF &cfg, const Config::Config &config, const string &pref
 	GET_CFG(UseRSTT);
 	cfg.UseRSTT = UseRSTT ? 1 : 0;
 
-	string globalModel;
-	GET_CFG(globalModel);
-	if ( !globalModel.empty() )
-		strncpy(cfg.TTmodel, globalModel.c_str(), sizeof(cfg.TTmodel)-1);
+	// local model
+	bool UseLocalTT = cfg.UseLocalTT;
+	GET_CFG(UseLocalTT);
+	cfg.UseLocalTT = UseLocalTT ? 1 : 0;
+
+	GET_CFG_STRUCT(MaxLocalTTDelta);
 
 	string LocalVmodel;
 	GET_CFG(LocalVmodel);
 	memset(cfg.LocalVmodel, '\0', sizeof(cfg.LocalVmodel));
-	strncpy(cfg.LocalVmodel, LocalVmodel.c_str(), sizeof(cfg.LocalVmodel)-1);
+	strncpy(cfg.LocalVmodel, Environment::Instance()->absolutePath(LocalVmodel).c_str(), sizeof(cfg.LocalVmodel)-1);
 }
 
 
@@ -186,9 +199,6 @@ void initConfig(ILOC_CONF &cfg, const Config::Config *config,
 	strncpy(cfg.TTmodel, name.c_str(), sizeof(cfg.TTmodel)-1);
 
 	cfg.Verbose = 1;
-
-	strcpy(cfg.LocalVmodel, "");
-	cfg.MaxLocalTTDelta = 3.;
 
 	// ETOPO parameters
 	strcpy(cfg.EtopoFile, "etopo5_bed_g_i2.bin");
@@ -233,15 +243,23 @@ void initConfig(ILOC_CONF &cfg, const Config::Config *config,
 	cfg.UseRSTTPgLg = 1;
 	cfg.UseRSTT = 0;
 
+	// local model
+	cfg.MaxLocalTTDelta = 3.;
+	strcpy(cfg.LocalVmodel, "");
+
+	// read configuration from profiles
 	if ( config ) {
 		string prefix = "iLoc.profile." + name + ".";
 		readConfig(cfg, *config, prefix);
 	}
 
-	if ( strlen(cfg.LocalVmodel) > 1 && cfg.UseLocalTT )
+	// use local model or not
+	if ( strlen(cfg.LocalVmodel) > 1 && cfg.UseLocalTT ) {
 		cfg.UseLocalTT = 1;
-	else
+	}
+	else {
 		cfg.UseLocalTT = 0;
+	}
 }
 
 
@@ -303,9 +321,9 @@ void ILoc::AuxData::free() {
 	                 &infoLocalTT, tablesLocalTT,
 	                 useRSTT
 	                 );
-	tablesTT = NULL;
-	tablesLocalTT = NULL;
-	ec = NULL;
+	tablesTT = nullptr;
+	tablesLocalTT = nullptr;
+	ec = nullptr;
 	valid = false;
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -326,9 +344,9 @@ ILoc::ILoc() {
 		_allowedParameters.push_back("DoGridSearch");
 		_allowedParameters.push_back("DoNotRenamePhases");
 		_allowedParameters.push_back("UseRSTT");
+		_allowedParameters.push_back("UseLocalTT");
 		_allowedParameters.push_back("LocalVmodel");
 		_allowedParameters.push_back("MaxLocalTTDelta");
-		_allowedParameters.push_back("UseLocalTT");
 		_allowedParameters.push_back("MinIterations");
 		_allowedParameters.push_back("MaxIterations");
 		_allowedParameters.push_back("MinNdefPhases");
@@ -354,7 +372,7 @@ ILoc::ILoc() {
 
 	_profiles.push_back("iasp91");
 	_profiles.push_back("ak135");
-	initProfiles(NULL, Environment::Instance()->shareDir() + "/iloc");
+	initProfiles(nullptr, Environment::Instance()->shareDir() + "/iloc");
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -376,7 +394,7 @@ void ILoc::initProfiles(const Config::Config *config, const string &auxdir) {
 		initConfig(cfg, config, _profiles[i], auxdir);
 	}
 
-	_currentConfig = _profileConfigs.empty() ? NULL : &_profileConfigs[0];
+	_currentConfig = _profileConfigs.empty() ? nullptr : &_profileConfigs[0];
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -391,7 +409,7 @@ bool ILoc::init(const Config::Config &config) {
 		auxdir = Environment::Instance()->absolutePath(config.getString("iLoc.auxDir"));
 	}
 	catch ( ... ) {
-		auxdir = Environment::Instance()->shareDir() + "/iloc";
+		auxdir = Environment::Instance()->shareDir() + "/iloc/iLocAuxDir";
 	}
 
 	try {
@@ -432,22 +450,26 @@ ILoc::IDList ILoc::parameters() const {
 string ILoc::parameter(const string &name) const {
 #define RET_STRING(NAME) if ( name == #NAME ) return Core::toString(_currentConfig->NAME)
 
-	if ( !_currentConfig )
+	if ( !_currentConfig ) {
 		return string();
+	}
 
 	RET_STRING(Verbose);
-	else if ( name == "UsePickUncertainties" )
+	else if ( name == "UsePickUncertainties" ) {
 		return Core::toString(_usePickUncertainties);
-	else if ( name == "FixOriginTime" )
+	}
+	else if ( name == "FixOriginTime" ) {
 		return Core::toString(_fixTime);
-	else if ( name == "FixLocation" )
+	}
+	else if ( name == "FixLocation" ) {
 		return Core::toString(_fixLocation);
+	}
 	else RET_STRING(DoGridSearch);
 	else RET_STRING(DoNotRenamePhases);
 	else RET_STRING(UseRSTT);
+	else RET_STRING(UseLocalTT);
 	else RET_STRING(LocalVmodel);
 	else RET_STRING(MaxLocalTTDelta);
-	else RET_STRING(UseLocalTT);
 	else RET_STRING(MinIterations);
 	else RET_STRING(MaxIterations);
 	else RET_STRING(MinNdefPhases);
@@ -462,8 +484,9 @@ string ILoc::parameter(const string &name) const {
 	else RET_STRING(MinDepthPhases);
 	else RET_STRING(MaxShallowDepthError);
 	else RET_STRING(MaxDeepDepthError);
-	else if ( name == "DefaultPickUncertainty" )
+	else if ( name == "DefaultPickUncertainty" ) {
 		return Core::toString(_defaultPickUncertainty);
+	}
 
 	return string();
 }
@@ -481,38 +504,39 @@ bool ILoc::setParameter(const string &name, const string &value) {
 	_currentConfig->NAME = v;\
 }
 
-	if ( !_currentConfig )
+	if ( !_currentConfig ) {
 		return false;
+	}
 
 	INP_STRING(Verbose, int)
 	else if ( name == "UsePickUncertainties" ) {
 		bool v;
-		if ( !Core::fromString(v, value) )
+		if ( !Core::fromString(v, value) ) {
 			return false;
-
+		}
 		_usePickUncertainties = v;
 	}
 	else if ( name == "FixOriginTime" ) {
 		bool v;
-		if ( !Core::fromString(v, value) )
+		if ( !Core::fromString(v, value) ) {
 			return false;
-
+		}
 		_fixTime = v;
 	}
 	else if ( name == "FixLocation" ) {
 		bool v;
-		if ( !Core::fromString(v, value) )
+		if ( !Core::fromString(v, value) ) {
 			return false;
-
+		}
 		_fixLocation = v;
 	}
 	else INP_STRING(DoGridSearch, int)
 	else INP_STRING(DoNotRenamePhases, int)
 	if ( name == "UseRSTT" ) {
 		int v;
-		if ( !Core::fromString(v, value) )
+		if ( !Core::fromString(v, value) ) {
 			return false;
-
+		}
 		v = v ? 1 : 0;
 
 		if ( _currentConfig->UseRSTT != v ) {
@@ -521,12 +545,12 @@ bool ILoc::setParameter(const string &name, const string &value) {
 			_auxDirty = true;
 		}
 	}
+	else INP_STRING(UseLocalTT, int)
 	else if ( name == "LocalVmodel" ) {
 		memset(_currentConfig->LocalVmodel, '\0', sizeof(_currentConfig->LocalVmodel));
 		strncpy(_currentConfig->LocalVmodel, value.c_str(), sizeof(_currentConfig->LocalVmodel)-1);
 	}
 	else INP_STRING(MaxLocalTTDelta, double)
-	else INP_STRING(UseLocalTT, int)
 	else INP_STRING(MinIterations, int)
 	else INP_STRING(MaxIterations, int)
 	else INP_STRING(MinNdefPhases, int)
@@ -544,13 +568,15 @@ bool ILoc::setParameter(const string &name, const string &value) {
 	else if ( name == "DEFAULT_PICK_UNCERTAINTY" ) {
 		double dpu;
 
-		if ( !Core::fromString(dpu, value) )
+		if ( !Core::fromString(dpu, value) ) {
 			return false;
+		}
 
 		_defaultPickUncertainty = dpu;
 	}
-	else
+	else {
 		return false;
+	}
 
 	return true;
 }
@@ -572,7 +598,7 @@ ILoc::IDList ILoc::profiles() const {
 void ILoc::setProfile(const string &name) {
 	if ( !strcmp(_currentConfig->TTmodel, name.c_str()) ) return;
 
-	_currentConfig = NULL;
+	_currentConfig = nullptr;
 
 	for ( size_t i = 0; i < _profiles.size(); ++i ) {
 		if ( _profiles[i] == name ) {
@@ -626,7 +652,7 @@ throw(Core::GeneralException)
 {
 #endif
 	prepareAuxFiles();
-	return NULL;
+	return nullptr;
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -640,7 +666,7 @@ throw(Core::GeneralException)
 #endif
 {
 	if ( !_currentConfig ) {
-		return NULL;
+		return  nullptr;
 	}
 
 	prepareAuxFiles();
@@ -684,8 +710,9 @@ throw(Core::GeneralException)
 
 		DataModel::Pick *pick = getPick(arrival);
 
-		if ( pick == NULL )
+		if ( pick == nullptr ) {
 			throw Seismology::PickNotFoundException("pick '" + arrival->pickID() + "' not found");
+		}
 
 		bool timeUsed = true;
 
@@ -704,7 +731,7 @@ throw(Core::GeneralException)
 #endif
 
 		DataModel::SensorLocation *sloc = getSensorLocation(pick);
-		if ( sloc == NULL ) {
+		if ( sloc == nullptr ) {
 			if ( pick->waveformID().locationCode().empty() )
 				throw Seismology::StationNotFoundException(
 					"station '" + pick->waveformID().networkCode() +
@@ -896,7 +923,9 @@ throw(Core::GeneralException)
 
 	if ( !res ) {
 		DataModel::Origin* origin = DataModel::Origin::Create();
-		if (!origin) return NULL;
+		if (!origin) {
+			return nullptr;
+		}
 
 		DataModel::CreationInfo ci;
 		ci.setCreationTime(Core::Time().gmt());
@@ -940,8 +969,9 @@ throw(Core::GeneralException)
 		string vmodel;
 		bool ambiguousVmodel = false;
 
-		if ( fixedDepth() )
+		if ( usingFixedDepth() ) {
 			origin->setDepthType(DataModel::OriginDepthType(DataModel::OPERATOR_ASSIGNED));
+		}
 
 		for ( size_t i = 0; i < assocs.size(); ++i ) {
 			++phaseAssocCount;
@@ -977,26 +1007,33 @@ throw(Core::GeneralException)
 				arrival->setWeight(0.0);
 
 			arrival->setDistance(assoc.Delta);
-			if ( assoc.TimeRes != ILOC_NULLVAL )
+			if ( assoc.TimeRes != ILOC_NULLVAL ) {
 				arrival->setTimeResidual(assoc.TimeRes);
-			if ( assoc.Esaz != ILOC_NULLVAL )
+			}
+			if ( assoc.Esaz != ILOC_NULLVAL ) {
 				arrival->setAzimuth(assoc.Esaz);
+			}
 			arrival->setPhase(DataModel::Phase(assoc.Phase));
 
 			// Populate horizontal slowness residual
-			if ( assoc.SlowRes != ILOC_NULLVAL )
+			if ( assoc.SlowRes != ILOC_NULLVAL ) {
 				arrival->setHorizontalSlownessResidual(assoc.SlowRes);
+			}
 
 			// Populate backazimuth residual
-			if ( assoc.AzimRes != ILOC_NULLVAL )
+			if ( assoc.AzimRes != ILOC_NULLVAL ) {
 				arrival->setBackazimuthResidual(assoc.AzimRes);
+			}
 
-			if ( !origin->add(arrival.get()) )
+			if ( !origin->add(arrival.get()) ) {
 				SEISCOMP_DEBUG("arrival not added for some reason");
+			}
 
 			if ( isUsed ) {
-				if ( vmodel.empty() )
+				if ( vmodel.empty() ) {
 					vmodel = assoc.Vmodel;
+
+				}
 				else if ( vmodel != assoc.Vmodel ) {
 					SEISCOMP_DEBUG("Ambiguous earth model: %s != %s", vmodel.c_str(), assoc.Vmodel);
 					ambiguousVmodel = true;
@@ -1004,8 +1041,9 @@ throw(Core::GeneralException)
 			}
 		}
 
-		if ( !ambiguousVmodel )
+		if ( !ambiguousVmodel ) {
 			origin->setEarthModelID(vmodel);
+		}
 
 		origin->setQuality(DataModel::OriginQuality());
 		DataModel::OriginQuality &originQuality = origin->quality();
@@ -1026,11 +1064,14 @@ throw(Core::GeneralException)
 			std::sort(azi.begin(), azi.end());
 			azi.push_back(azi.front()+360.);
 			double azGap = 0.;
-			if ( azi.size() > 2 )
-				for ( size_t i = 0; i < azi.size()-1; ++i )
+			if ( azi.size() > 2 ) {
+				for ( size_t i = 0; i < azi.size()-1; ++i ) {
 					azGap = (azi[i+1]-azi[i]) > azGap ? (azi[i+1]-azi[i]) : azGap;
-			if ( 0. < azGap && azGap < 360. )
+				}
+			}
+			if ( 0. < azGap && azGap < 360. ) {
 				originQuality.setAzimuthalGap(azGap);
+			}
 		}
 
 		if ( !dist.empty() ) {
@@ -1071,7 +1112,7 @@ throw(Core::GeneralException)
 			throw Seismology::LocatorException("iLoc: no solution found");
 	}
 
-	return NULL;
+	return nullptr;
 }
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -1089,7 +1130,15 @@ string ILoc::lastMessage(MessageType) const {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void ILoc::prepareAuxFiles() {
-	if ( !_auxDirty ) return;
+	// use local model or not
+	if ( strlen(_currentConfig->LocalVmodel) == 0 && _currentConfig->UseLocalTT ) {
+		throw Seismology::LocatorException("iLoc: UseLocalTT set but not LocalVmodel defined");
+	}
+
+	if ( !_auxDirty ) {
+		return;
+	}
+
 	SEISCOMP_DEBUG("Read AUX files");
 	_aux.read(_currentConfig);
 	_auxDirty = false;

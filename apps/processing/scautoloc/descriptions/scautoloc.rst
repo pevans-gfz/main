@@ -1,11 +1,17 @@
 scautoloc is the |scname| program responsible for automatically locating
-seismic events in near-real time. It normally runs as a daemon continuously
-reading picks and amplitudes and processing them in real time. An offline
-mode is available as well. scautoloc reads automatic picks and several
-associated amplitudes. On that basis it tries to identify combinations of
-picks that correspond to a common seismic event. If the produced location
-meets certain consistency criteria, it is reported, i.e. passed on to other
-programs that take the origins as input.
+seismic events in near-real time from :term:`phase picks <pick>` considering
+:term:`associated amplitudes <amplitude>`. It tries to identify combinations of
+picks that correspond to a common seismic or non-seismic :term:`event`. The
+picks are sent to :ref:`global_locsat` for locating. If the
+produced location meets configurable consistency criteria, it is reported as an
+:term:`origin` object , i.e. passed on to other programs that take the origins
+as input. Phase picks and amplitudes are usually created by :ref:`scautopick`
+but can also be provided by other means.
+
+scautoloc normally runs as a :ref:`daemon <sec-scautoloc-daemon-mode>`
+continuously reading picks and amplitudes and processing them in real time. An
+:ref:`offline mode <sec-scautoloc-offline-mode>` is available as well, e.g., for
+playbacks on demand.
 
 
 Location procedure
@@ -15,45 +21,74 @@ The procedure of scautoloc to identify and locate seismic events basically
 consists of the following steps:
 
 
-Pick preparation 
-----------------
+.. _sec-scautoloc-pick-filtering:
 
-In scautoloc each incoming pick needs to be accompanied by a specific set
-of amplitudes. Since in the |scname| data model amplitudes and picks are
-independent objects, the amplitudes are added as attributes to their
-corresponding picks upon reception by scautoloc.
-
-
-Pick filtering 
+Pick filtering
 --------------
 
-Each incoming pick is filtered, i.e. it is checked if a pick is outdated
-and if the complete set of associated amplitudes is present already. If
+:program:`scautoloc` receives and filters :term:`phase picks <picks>` to
+generate :term:`origins <origin>`. These phase picks are used by default if
+
+* The phase hint is "P",
+* **And** the evaluation mode is "automatic". The use of manual picks is
+  controlled by :confval:`autoloc.useManualPicks`.
+* **And** the evaluation status is not "rejected", can be overridden by
+  :option:`--allow-rejected-picks`,
+* **And** :confval:`autoloc.authors` is empty or the author of the pick is
+  listed in :confval:`autoloc.authors`
+* **And** the picks are :ref:`accompanied by amplitudes <sec-scautoloc-amplitudes>`
+  configured in :confval:`autoloc.amplTypeAbs`, :confval:`autoloc.amplTypeSNR`.
+
+All other picks are ignored.
+
+.. note::
+
+   * The evaluation status of a picks can be set to 'rejected', e.g., by
+     :ref:`scautopick` along with the configuration of :confval:`sendDetections`,
+   * The order of the author IDs in  :confval:`autoloc.authors` may determine
+     the pick priority. This feature may be implemented in the future.
+
+Each incoming pick is checked if it is outdated and if the complete set of
+:ref:`associated amplitudes <sec-scautoloc-amplitudes>` is present already. If
 a station produces picks extremely often, these are considered to be more
-likely glitches and result in an increased :term:`SNR` threshold.
+likely glitches resulting in an increased :term:`SNR` threshold.
+
+The filtered picks are passed on to :ref:`association <sec-scautoloc-association>`
+and :ref:`nucleation <sec-scautoloc-nucleation>`.
 
 
-Association 
------------
+.. _sec-scautoloc-association:
 
-It is first attempted to associate an incoming pick with the known origins.
+Pick association
+----------------
+
+It is first attempted to associate an incoming pick with a known origin.
+The association is limited to epicentral distances given by
+:ref:`autoloc.maxStationDistance`.
 Especially for large events with stable locations based on many picks already
 associated, this is the preferred way to handle the pick. If the association
 succeeds, the nucleation process can be bypassed. Under certain circumstances
 picks are both associated and fed into the nucleator.
 
 
-Nucleation 
-----------
+.. _sec-scautoloc-nucleation:
+
+Origin nucleation
+-----------------
 
 If direct association fails, scautoloc tries to make a new origin out of this
 and other unassociated, previously received picks. This process is called
 "nucleation". scautoloc performs a grid search over space and time, which is
 a rather expensive procedure as it requires lots of resources both in terms
-of CPU and RAM. Additional nucleation algorithms will become available in
-future. The grid is a discrete set of -in principle- arbitrary points that
-sample the area of interest sufficiently densely. In the grid search, each
-of the grid points is taken as a hypothetical hypocenter for all incoming
+of CPU and RAM. Additional nucleation algorithms may become available in
+future. The :ref:`spatial grid <sec-scautoloc-grid>` is a discrete set of
+generally arbitrary points that sample the area of interest sufficiently densely.
+The usability of a pick from a station for a grid point is controlled by the
+:ref:`grid itself <sec-scautoloc-grid>` and the
+:ref:`station configuration <sec-scautoloc-stations>`.
+
+In the grid search, each of the grid points is taken as a hypothetical
+hypocenter for all incoming
 picks. Each incoming pick is back projected in time for each of the grid
 points, on the assumption that it is a first-arrival "P" onset. If the pick
 indeed corresponds to a "P" arrival of a seismic event, and if this event was
@@ -66,22 +101,23 @@ is limited, this is not possible. Therefore, if a cluster is identified as a
 potential origin, it does not necessarily mean that all contributing picks
 actually correspond to "P" arrivals. It may as well be a coincidental match
 caused by the coarseness of the grid or possible contamination by picked noise.
-Therefore, a location program (LocSAT) is run in order to try a location and
-test if the set of picks indeed forms a consistent hypocenter. If the pick
-residual :term:`RMS` is too large, an improvement is attempted by excluding each of
+Therefore, the location program :ref:`LOCSAT<global_locsat>` is run in order to
+try a location and test if the set of picks indeed forms a consistent hypocenter.
+If the pick residual :term:`RMS` is too large, an improvement is attempted by
+excluding each of
 the contributing picks once to test if a reduction in RMS can be achieved.
 If the new origin meets all requirements, it is accepted as new seismic event
 location.
 
-The grid points are specified in a text file "grid.txt".
-The default file shipped with scautoloc defines a grid with globally even
+The grid points are specified in a text file configured in :confval:`autoloc.grid`.
+The default file shipped with scautoloc defines a grid with global evenly
 distributed points at the surface, and depth points confined to regions of
 known deep seismicity. It may be modified, but should not comprise too many
-grid points (>3000, depending on CPU speed and RAM). See below for more
-details about the grid file.
+grid points (>3000, depending on CPU speed and RAM).
+:ref:`See below <sec-scautoloc-grid>` for more details about the grid file.
 
 
-Origin refinement 
+Origin refinement
 -----------------
 
 An origin produced or updated through association and/or nucleation may still
@@ -107,8 +143,14 @@ In the course of nucleation and association, as well as in the origin
 refinement and filtering, certain heuristic criteria are applied to compare
 the "qualities" of concurring origins. These criteria are combined in an
 internal origin score, which is based on properties of the picks themselves
-in the context of the respective origin (residuals: :confval:`autoloc.maxResidual`,
-RMS: :confval:`autoloc.maxRMS`, azimuthal gaps: :confval:`autoloc.maxSGAP`).
+in the context of the respective origin. The configurable criteria which origins
+must meet to be reported are:
+
+* Minimum number of phases per origins: :confval:`autoloc.minPhaseCount`,
+* Station residual residual: :confval:`autoloc.maxResidual`,
+* Origin RMS: :confval:`autoloc.maxRMS`,
+* Maximum depth: :confval:`autoloc.maxDepth`),
+* Azimuthal gap: :confval:`autoloc.maxSGAP`).
 
 In addition, the amplitudes provide valuable means of comparing origin
 qualities. Obviously, a pick with a high :term:`SNR` will less likely be a transient
@@ -127,6 +169,8 @@ picker, these two amplitudes must nevertheless be provided to scautoloc.
 Otherwise, the picks are not used. At the moment this is a strict requirement,
 in the future it may be changed.
 
+
+.. _sec-scautoloc-grid:
 
 Grid file
 =========
@@ -154,7 +198,9 @@ with even spacing of ~5° with additional points at greater depths where
 deep-focus events are known to occur.
 
 
-Station configuration file
+.. _sec-scautoloc-stations:
+
+Station Configuration File
 ==========================
 
 The station configuration file contains lines consisting of network code,
@@ -170,9 +216,9 @@ station will then not pose a risk for locations generated outside the maximum
 nucleation distance. Network and station code may be wildcards (\*) for
 convenience ::
 
-    * * 1 90 
+    * * 1 90
     GE * 1 180
-    GE HLG 1 10 
+    GE HLG 1 10
     TE RGN 0 10
 
 The example above means that all stations from all networks by default can
@@ -183,7 +229,7 @@ to 10°. By setting the 3rd column to 0, TE RGN is ignored.
 
 .. _sec-scautoloc-prelim-origins:
 
-Preliminary origins
+Preliminary Origins
 ===================
 
 Usually, scautoloc will not report origins with less than a certain
@@ -236,7 +282,7 @@ This will extract all lines containing the above keywords, providing a very
 simple (and primitive) origin history.
 
 
-Publication interval
+Publication Interval
 ====================
 
 In principle, scautoloc produces a new solution (origin) after each processed
@@ -277,7 +323,7 @@ objects. The time interval between subsequent housekeepings is specified in
 :confval:`buffer.cleanupInterval` in seconds.
 
 
-Test mode
+Test Mode
 =========
 
 In the test mode, scautoloc connects to a messaging server as usual and
@@ -286,23 +332,40 @@ the server. Log files are written as usual. This mode can be used to test
 new parameter settings before implementation in the real-time system. It also
 provides a simple way to log picks from a real-time system to the pick log.
 
+.. _sec-scautoloc-daemon-mode:
 
-Offline mode
+Daemon Mode
+===========
+
+For running scautoloc continuously in the background as a daemon it must be
+enabled and started:
+
+.. code-block:: sh
+
+   seiscomp enable scautoloc
+   seiscomp start scautoloc
+
+
+.. _sec-scautoloc-offline-mode:
+
+Offline Mode
 ============
 
 scautoloc normally runs as a daemon in the background, continuously reading
 picks and amplitudes and processing them in real time. However, scautoloc
 may also be operated in offline mode. This is useful for debugging. Offline
-mode is activated by adding the command-line parameter  -\\-ep or -\\-offline.
-When operated in offline mode,
+mode is activated by adding the command-line parameter  :option:`--ep` or
+:option:`--offline`. When operated in offline mode,
 scautoloc will not connect to the messaging. Instead, it reads picks from a
-:term:`SCML` file provided with -\\-ep or from standard input in the pick file
+:term:`SCML` file provided with :option:`--ep` or from standard input in the pick file
 format. The station coordinates are read from the inventory in the database or
 from the file either defined in :confval:`autoloc.stationLocations` or
 -\\-station-locations .
 
-Example for entries in a pick file::
-  
+Example for entries in a pick file
+
+.. code-block:: sh
+
     2008-09-25 00:20:16.6 SK LIKS EH __ 4.6 196.953 1.1 A [id]
     2008-09-25 00:20:33.5 SJ BEO BH __ 3.0 479.042 0.9 A [id]
     2008-09-25 00:21:00.1 CX MNMCX BH __ 21.0 407.358 0.7 A [id]
@@ -325,8 +388,10 @@ example.
    the database, in consequence the station coordinates cannot be read from the
    database and thus have to be supplied via a file. The station coordinates file
    has a simple format with one line per entry, consisting of 5 columns: network
-   code, station code, latitude, longitude, elevation (in meters), e.g., ::
-  
+   code, station code, latitude, longitude, elevation (in meters). Example:
+
+   .. code-block:: sh
+
        GE APE 37.0689 25.5306 620.0
        GE BANI -4.5330 129.9000 0.0
        GE BKB -1.2558 116.9155 0.0
@@ -335,17 +400,20 @@ example.
        GE CART 37.5868 -1.0012 65.0
        GE CEU 35.8987 -5.3731 320.0
        GE CISI -7.5557 107.8153 0.0
-  
+
 The location of this file is specified in :confval:`autoloc.stationLocations` or on the
 command line using -\\-station-locations
 
 
-How to make scautopick and scautoloc work together
-==================================================
+scautopick and scautoloc Interaction
+====================================
 
 The two main programs in the automatic event detection and location processing
-chain, :ref:`scautopick` and :program:`scautoloc`, only work together if the information needed
-by scautoloc can be supplied by :ref:`scautopick`. This document explains current
+chain, :ref:`scautopick` and :program:`scautoloc`, only work together if the
+information needed by scautoloc can be supplied by :ref:`scautopick` and received
+by :program:`scautoloc` through the message group defined by
+:confval:`connection.subscription` or through :term:`SCML` (:option:`--ep`,
+:option:`-i`). This document explains current
 implicit dependencies between these two utilities and is meant as a guide
 especially for those who plan to modify or replace one or both of these
 utilities by own developments.
@@ -358,22 +426,24 @@ a standard.
 Picks
 -----
 
-The data scautoloc works with are primarily seismic phase picks. In addition,
-certain amplitudes are used as a kind of quality criterion for the pick, allowing
-picks with a higher absolute amplitude or signal-to-noise ratio to be given
-priority in the processing over weak low-quality picks.
+:program:`scautoloc` works with
+:ref:`seismic phase picks <sec-scautoloc-pick-filtering>`.
+In addition, certain amplitudes are used as a kind of quality criterion for the
+pick, allowing picks with a higher absolute amplitude or signal-to-noise ratio
+to be given priority in the processing over weak low-quality picks. Due to the
+filtering of picks by phaseHint it is highly recommended to always set the
+phaseHint attribute with the appropriate phase name in :ref:`scautopick`. There
+is no restriction regarding the choice of the publicID of the pick.
 
-Currently scautoloc only processes automatic, 1st-arrival P picks. Furthermore,
-in the current version of scautopick only P picks are produced anyway. It can
-therefore be safely assumed by scautoloc that any automatic pick is a P pick
-that either has a phaseHint attribute explicitly stating "P" ot the phaseHint
-attribute left empty. Automatic picks with a phaseHint other than "P" as well
-as any picks not tagged as automatic are currently ignored. It is thus highly
-recommended to always set the phaseHint attribute with the appropriate phase
-name. There is no restriction regarding the choice of the publicID of the pick.
 
-Optionally scautoloc performance may be improved by processing certain
-amplitudes accompanying the picks. Two kinds of amplitudes may be used together
+.. _sec-scautoloc-amplitudes:
+
+Amplitudes
+----------
+
+By configuration, the performance of :program:`scautoloc` is also controlled by
+considering certain amplitudes accompanying the picks. Two kinds of amplitudes
+may be used together
 
 * An absolute amplitude like the one used for calculation of the magnitude "mb".
 * Relative amplitude like the dimension-less signal-to-noise ratio amplitude "snr".
@@ -382,7 +452,7 @@ Neither amplitude is used for magnitude computation by scautoloc. The default
 amplitude types used by scautoloc are of type "mb" and "snr". These defaults
 can be overridden in :file:`scautoloc.cfg`:
 
-.. code-block:: sh
+.. code-block:: properties
 
    autoloc.amplTypeSNR = snr
    autoloc.amplTypeAbs = mb
@@ -391,27 +461,22 @@ If for instance an alternate picker implementation doesn't produce "mb"-type
 absolute amplitude but e.g. "xy", then :confval:`autoloc.amplTypeAbs` needs to be set to
 "xy" to have them recognized by scautoloc.
 
-The use of manual picks is controlled by :confval:`autoloc.useManualPicks`.
-
-Pick processing may be enabled/disabled according to its author ID.
-This is controlled via :confval:`autoloc.authors`, which is a
-comma-separated list of author ID's. In addition to acting as a
-whitelist, the order of the author ID's determines the pick
-priority. An author early in the list is given higher priority.
-Note: The latter feature is not implemented yet.
-
-.. code-block:: sh
-
-   autoloc.authors = joeseismologist@screview, student@sctraining, repicker@scaux, scautopick@scmain
-
-Currently there **must** be an absolute and a relative amplitude for every pick.
-However, this requirement will be relaxed in a future version. But currently
-scautoloc will always wait until both amplitude have arrived, which results
-in an overall processing delay, corresponding to the usually delayed availability
+Currently there **must** be an absolute and a relative amplitude for every pick
+as configured by :confval:`autoloc.amplTypeAbs` and :confval:`autoloc.amplTypeSNR`.
+These amplitudes must be computed by :ref:`scautopick`.
+:program:`scautoloc` will always wait until both amplitudes have arrived, which
+results in an overall processing delay, corresponding to the usually delayed availability
 of amplitudes with respect to the corresponding pick. The default absolute
 amplitude "mb", for instance, takes a hard-coded 30-seconds time interval to
 be computed. This length of data thus has to be waited for, plus a little
-extra because of the size of the miniSEED records. An alternate picker
+extra because of the size of the miniSEED records.
+
+.. note::
+
+   Consider :ref:`scautopick` with :confval:`amplitudes.enableUpdate` in order
+   to provide mb amplitudes with shorter delays.
+
+An alternate picker
 implementation could produce a different absolute-amplitude type than "mb".
 That amplitude might be based on a different filter pass band and much shorter
 time window than the default "mb" amplitude, thus allowing a significantly
@@ -429,5 +494,5 @@ in a future version.
 Manual origins
 --------------
 
-Manual origins created e.g. in :ref:`scolv` may be considered for additional
+Manual origins created, e.g., in :ref:`scolv` may be considered for additional
 association of picks as controlled by :confval:`autoloc.useManualOrigins`.

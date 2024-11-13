@@ -36,17 +36,22 @@ Local distances
 ---------------
 
 :term:`Md <magnitude, duration (Md)>`
-   Duration magnitude as described in `HYPOINVERSE`_ .
+   Duration magnitude as described in HYPOINVERSE (:cite:t:`klein-2002`).
 
 :term:`Mjma <magnitude, JMA (M_JMA)>`
    Mjma is computed on displacement data using body waves of period < 30s.
 
 :term:`ML <magnitude, local (ML)>`
-   Local magnitude calculated on the vertical component using a correction term
-   to fit with the standard ML.
+   Local (Richter) magnitude calculated on the horizontal components using a
+   correction term to fit with the standard ML (:cite:t:`richter-1935`).
+
+:term:`MLc <magnitude, local custom (MLc)>`
+   Local custom magnitude calculated on the horizontal components according to
+   Hessian Earthquake Service and :cite:t:`stange-2006`
 
 :term:`MLh <magnitude, local horizontal (MLh)>`
-   Local magnitude calculated on the horizontal components to SED specifications.
+   Local magnitude calculated on the horizontal components according to SED
+   specifications.
 
 :term:`MLv <magnitude, local vertical (MLv)>`
    Local magnitude calculated on the vertical component using a correction term
@@ -54,10 +59,10 @@ Local distances
 
 :term:`MLr <magnitude, local GNS/GEONET (MLr)>`
    Local magnitude calculated from MLv amplitudes based on GNS/GEONET specifications
-   for New Zealand.
+   for New Zealand (:cite:t:`ristau-2016`).
 
 :term:`MN <magnitude, Nuttli (MN)>`
-   Nuttli magnitude for Canada and other Cratonic regions.
+   Nuttli magnitude for Canada and other Cratonic regions (:cite:t:`nuttli-1973`).
 
 
 Teleseismic distances
@@ -70,10 +75,10 @@ Teleseismic distances
    Cumulative body wave magnitude
 
 :term:`mB <magnitude, broadband body-wave (mB)>`
-   Broad band body wave magnitude after `Bormann and Saul`_ (2008)
+   Broad band body wave magnitude after :cite:t:`bormann-2008`
 
 :term:`Mwp <magnitude, broadband P-wave moment (Mwp)>`
-   The body wave magnitude of `Tsuboi`_ et al. (1995)
+   The body wave magnitude of :cite:t:`tsuboi-1995`
 
 :term:`Ms_20 <magnitude, surface wave (Ms_20)>`
    Surface-wave magnitude at 20 s period
@@ -89,11 +94,11 @@ Additionally, scmag derives the following magnitudes from primary magnitudes:
 
 :term:`Mw(mB) <magnitude, derived mB (Mw(mB))>`
    Estimation of the moment magnitude Mw based on mB using the Mw vs. mB
-   regression of `Bormann and Saul`_ (2008)
+   regression of :cite:t:`bormann-2008`
 
 :term:`Mw(Mwp) <magnitude, derived Mwp (Mw(Mwp))>`
    Estimation of the moment magnitude Mw based on Mwp using the Mw vs. Mwp
-   regression of `Whitmore`_ et al. (2002)
+   regression of :cite:t:`whitmore-2002`
 
 :term:`M <magnitude, summary (M)>`
    Summary magnitude, which consists of a weighted average of the individual
@@ -103,7 +108,7 @@ Additionally, scmag derives the following magnitudes from primary magnitudes:
 
    More details are given in the :ref:`section Summary magnitude<scmag-summaryM>`.
 
-:term:`Mw(avg)`
+Mw(avg)
    Estimation of the moment magnitude Mw based on a weighted average of other
    magnitudes, currently MLv, mb and Mw(mB), in future possibly other magnitudes as
    well, especially those suitable for very large events. The purpose of Mw(avg) is
@@ -124,9 +129,13 @@ Station magnitudes
 ==================
 
 Station magnitudes of a :ref:`particular magnitude type <scmag-primaryM>` are
-calculated based on amplitude values
-considered by this magnitude type and the distance between the event and the station
-at which the amplitude was measured. Typically, epicentral distance is used.
+calculated based on measured amplitudes considered by this magnitude type and
+the distance between the :term:`origin` and the station at which the amplitude
+was measured. Typically, epicentral distance is used for distance. Magnitudes
+may support configurable distance measures, e.g.,
+:term:`MLc <magnitude, local custom (MLc)>`. The relation between measured
+amplitudes, distance and station magnitude is given by a calibration function
+which is specific to a magnitude type and configurable for some magnitudes.
 
 .. note::
 
@@ -135,28 +144,55 @@ at which the amplitude was measured. Typically, epicentral distance is used.
    uses amplitudes computed for :term:`MLv <magnitude, local vertical (MLv)>`.
 
 
+Regionalization
+---------------
+
+Depending on the geographic region in which events, stations or entire ray paths
+are located, different calibration functions and constraints may apply. This is
+called "magnitude regionalization". The region is defined by a polygon stored in
+a region file. For a particular magnitude, regionalization can be configured by
+global parameters, e.g., in :file:`$SEISCOMP_ROOT/etc/global.cfg`.
+
+#. Add magnitude type profile to the magnitudes parameters. The name of the
+   profile must be the name of the magnitude type.
+#. Add the profile-specific parameters.
+
+Example for MLc in :file:`$SEISCOMP_ROOT/etc/global.cfg` the polygon with name
+*test* defined in a :ref:`BNA file <sec-gui_layers-vector>`:
+
+.. code-block:: properties
+
+   magnitudes.MLc.regionFile = @DATADIR@/spatial/vector/magnitudes/regions.bna
+   magnitudes.MLc.region.test.enable = true
+   magnitudes.MLc.region.test.A0.logA0 = 0:-1.3, 60:-2.8, 100:-3.0, 400:-4.5, 1000:-5.85
+
+
 .. _scmag-networkM:
 
 Network magnitudes
 ==================
 
-The network magnitude is a magnitude value summarizing several :ref:`station magnitudes <scmag-stationM>`
-values of one :term:`origin`.
-Different methods are available for summarizing the station magnitudes:
+The network magnitude is a magnitude value summarizing several
+:ref:`station magnitudes <scmag-stationM>` values of one :term:`origin`.
+Different methods are available for forming network magnitudes from station
+magnitudes:
 
-* mean: the usual mean value
-* trimmed mean value:
-  To stabilize the network magnitudes the smallest and the largest 12.5% of the
-  :term:`station magnitude` values are removed before computing the mean.
-* median: the usual median value
-* median trimmed mean:
-  Removing all station magnitudes with a distance greater than 0.5 (default)
-  from the median of all station magnitudes and computing the mean of all
-  remaining station magnitudes.
+.. csv-table::
+   :header: Method, Description
+   :widths: 20 80
+   :align: left
+   :delim: ;
 
-Default values apply for each magnitude type.
-In :ref:`scolv` the methods, the stations magnitudes and other parameters can be
-selected interactively.
+   mean; The usual mean value.
+   trimmed mean value; To stabilize the network magnitudes the smallest and the largest 12.5% of the :term:`station magnitude` values are removed before computing the mean.
+   median; The usual median value.
+   median trimmed mean; Removing all station magnitudes with a distance greater than 0.5 (default) from the median of all station magnitudes and computing the mean of all remaining station magnitudes.
+
+Configure the method per magnitude type by :confval:`magnitudes.average`.
+Default values apply for each magnitude type which are defined by the magnitude
+itself.
+In the :ref:`scolv Magnitudes tab <scolv-sec-magnitude-tab>` the methods, the
+stations magnitudes and other parameters can be selected interactively.
 
 
 .. _scmag-summaryM:
@@ -166,21 +202,23 @@ Summary magnitude
 
 scmag can compute a summary magnitude as a weighted sum from all available
 :ref:`network magnitudes <scmag-networkM>`.
-This magnitude is typically called **M** as configured in :confval:`summaryMagnitude.type`.
+This magnitude is typically called **M** as configured in
+:confval:`summaryMagnitude.type`.
 
 It is computed as a weighted average over the available magnitudes:
 
 .. math::
 
-   M = \frac{\sum w_{i} M_{i}}{\sum w_i}
+   M &= \frac{\sum w_{i} * M_{i}}{\sum w_i} \\
+   w_{i} &= a_i * stationCount(M_{i}) + b_i
 
-   w_{i} = a_i stationCount(M_{i}) + b_i
-
-The coefficients a and b can be configured per magnitude type by :confval:`summaryMagnitude.coefficients.a`
+The coefficients a and b can be configured per magnitude type by
+:confval:`summaryMagnitude.coefficients.a`
 and :confval:`summaryMagnitude.coefficients.b`, respectively.
-Furthermore each magnitude type can be specifically added to or excluded from the summary magnitude calculation
-as defined in :confval:`summaryMagnitude.whitelist` or :confval:`summaryMagnitude.blacklist`,
-respectively.
+Furthermore each magnitude type can be specifically added to or excluded from the
+summary magnitude calculation
+as defined in :confval:`summaryMagnitude.whitelist` or
+:confval:`summaryMagnitude.blacklist`, respectively.
 
 .. note::
 
@@ -192,15 +230,5 @@ Preferred Magnitude
 ===================
 
 The preferred magnitude of an :term:`event` is set automatically by :ref:`scevent`
-or interactively in :ref:`scolv`. It can be any network magnitude or the summary magnitude.
-
-
-References
-==========
-
-.. target-notes::
-
-.. _`HYPOINVERSE` :  https://earthquake.usgs.gov/research/software/#HYPOINVERSE
-.. _`Bormann and Saul` : https://pubs.geoscienceworld.org/ssa/srl/article/79/5/698/143470/The-New-IASPEI-Standard-Broadband-Magnitude-mB
-.. _`Tsuboi`: https://pubs.geoscienceworld.org/bssa/article-pdf/85/2/606/2708350/BSSA0850020606.pdf
-.. _`Whitmore` : https://tsunamisociety.org/STHVol20N4Y2002.pdf
+or interactively in :ref:`scolv`. It can be any network magnitude or the summary
+magnitude.

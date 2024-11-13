@@ -33,7 +33,7 @@ Picker::Config::Config() {
 	test = false;
 	offline = false;
 
-	useAllStreams = true;
+	useAllStreams = false;
 	calculateAmplitudes = true;
 	interpolateGaps = false;
 	maxGapLength = 4.5;
@@ -78,6 +78,12 @@ void Picker::Config::init(const Client::Application *app) {
 	try { phaseHint = app->configGetString("phaseHint"); }
 	catch ( ... ) {}
 
+	try { commentID = app->configGetString("comment.ID"); }
+	catch ( ... ) {}
+
+	try { commentText = app->configGetString("comment.text"); }
+	catch ( ... ) {}
+
 	try { calculateAmplitudes = app->configGetBool("calculateAmplitudes"); }
 	catch (...) {}
 
@@ -106,12 +112,10 @@ void Picker::Config::init(const Client::Application *app) {
 	catch (...) {}
 	try { triggerDeadTime = app->configGetDouble("thresholds.deadTime"); }
 	catch (...) {}
-	/* TODO: Needs support in detector
 	try { minDuration = app->configGetDouble("thresholds.minDuration"); }
 	catch (...) {}
 	try { maxDuration = app->configGetDouble("thresholds.maxDuration"); }
 	catch (...) {}
-	*/
 
 	try { amplitudeMaxTimeWindow = app->configGetDouble("thresholds.amplMaxTimeWindow"); }
 	catch (...) {}
@@ -180,24 +184,41 @@ void Picker::Config::dump() const {
 	printf("useAllStreams                    %s\n",     useAllStreams ? "true":"false");
 	printf("calculateAmplitudes              %s\n",     calculateAmplitudes ? "true":"false");
 	printf("calculateAmplitudeTypes          ");
-	if ( amplitudeList.empty() )
+	if ( amplitudeList.empty() ) {
 		printf("[]\n");
+	}
 	else {
 		for ( StringSet::const_iterator it = amplitudeList.begin();
 		      it != amplitudeList.end(); ++it ) {
-			if ( it != amplitudeList.begin() )
+			if ( it != amplitudeList.begin() ) {
 				printf(", ");
+			}
 			printf("%s", it->c_str());
 		}
 		printf("\n");
 	}
-	printf("interpolateGaps                  %s\n",     interpolateGaps ? "true":"false");
-	printf("maxGapLength                     %.2f s\n", maxGapLength);
-	printf("defaultFilter                    %s\n",     defaultFilter.c_str());
-	printf("defaultTriggerOnThreshold        %.2f\n",   defaultTriggerOnThreshold);
-	printf("defaultTriggerOffThreshold       %.2f\n",   defaultTriggerOffThreshold);
-	//printf("minDuration                      %.2f\n",   minDuration);
-	//printf("maxDuration                      %.2f\n",   maxDuration);
+
+	printf("update amplitude types           ");
+	if ( amplitudeUpdateList.empty() ) {
+		printf("[]\n");
+	}
+	else {
+		for ( StringSet::const_iterator it = amplitudeUpdateList.begin();
+		      it != amplitudeUpdateList.end(); ++it ) {
+			if ( it != amplitudeUpdateList.begin() ) {
+				printf(", ");
+			}
+			printf("%s", it->c_str());
+		}
+		printf("\n");
+	}
+	printf("interpolateGaps                  %s\n",    interpolateGaps ? "true":"false");
+	printf("maxGapLength                     %.2fs\n", maxGapLength);
+	printf("defaultFilter                    %s\n",    defaultFilter.c_str());
+	printf("defaultTriggerOnThreshold        %.2f\n",  defaultTriggerOnThreshold);
+	printf("defaultTriggerOffThreshold       %.2fs\n", defaultTriggerOffThreshold);
+	printf("minDuration                      %.2fs\n", minDuration);
+	printf("maxDuration                      %.2f\n",  maxDuration);
 	printf("triggerDeadTime                  %.2fs\n", triggerDeadTime);
 	printf("amplitudeMaxTimeWindow           %.2fs\n", amplitudeMaxTimeWindow);
 	printf("amplitudeMinOffset               %.2fs\n", amplitudeMinOffset);
