@@ -700,7 +700,7 @@ As a shortcut for committing with additional options,
 :ref:`custom commit buttons <fig-scolv-custom-commit>` can be added by
 configuration: Add, enable and configure a custom commit profile in
 :confval:`olv.customCommits`.
-With custom commit buttons origin and event paramters can be set, e.g.:
+With custom commit buttons origin and event parameters can be set, e.g.:
 
 * Origin status
 * Fixing the origin
@@ -1270,7 +1270,7 @@ Location tab
 ^^^^^^^^^^^^
 
 To add an origin comment value to the information panel of the Location tab,
-configure display paramters in scolv. Example (:file:`scolv.cfg`):
+configure display parameters in scolv. Example (:file:`scolv.cfg`):
 
 .. code-block:: sh
 

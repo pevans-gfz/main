@@ -90,7 +90,7 @@ class ObjectAlert(seiscomp.client.Application):
             return False
 
         foundScript = False
-        # module configuration paramters
+        # module configuration parameters
         try:
             self._newWhenFirstSeen = self.configGetBool("firstNew")
         except:

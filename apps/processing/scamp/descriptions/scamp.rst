@@ -102,8 +102,8 @@ data. Here, the frequency range is limited to 0.5 - 20 Hz: ::
 Re-processing
 =============
 
-*scamp* can be used to reprocess and to update amplitudes, e.g. when inventory paramters
-had to be changed retrospectively. Updating ampitudes requires waveform access.
+*scamp* can be used to reprocess and to update amplitudes, e.g. when inventory parameters
+had to be changed retrospectively. Updating amplitudes requires waveform access.
 The update can be performed
 
 1. In **offline processing** based on XML files (:confval:`--ep`). :confval:`--reprocess<reprocess>`
